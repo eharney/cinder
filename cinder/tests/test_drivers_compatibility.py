@@ -36,6 +36,7 @@ WINDOWS_MODULE = "cinder.volume.drivers.windows.windows.WindowsDriver"
 XIV_DS8K_MODULE = "cinder.volume.drivers.xiv_ds8k.XIVDS8KDriver"
 ZADARA_MODULE = "cinder.volume.drivers.zadara.ZadaraVPSAISCSIDriver"
 NETAPP_MODULE = "cinder.volume.drivers.netapp.common.Deprecated"
+LVM_MODULE = "cinder.volume.drivers.lvm.LVMISCSIDriver"
 
 
 class VolumeDriverCompatibility(test.TestCase):
@@ -193,3 +194,11 @@ class VolumeDriverCompatibility(test.TestCase):
         self._load_driver(
             'cinder.volume.drivers.netapp.nfs.NetAppCmodeNfsDriver')
         self.assertEqual(self._driver_module_name(), NETAPP_MODULE)
+
+    def test_lvm_short(self):
+        self._load_driver('lvm')
+        self.assertEqual(self._driver_module_name(), LVM_MODULE)
+
+    def test_nfs_caps_short(self):
+        self._load_driver('NFS')
+        self.assertEqual(self._driver_module_name(), NFS_MODULE)

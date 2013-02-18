@@ -137,6 +137,49 @@ MAPPING = {
     'cinder.volume.drivers.huawei.HuaweiISCSIDriver':
     'cinder.volume.drivers.huawei.HuaweiVolumeDriver'}
 
+SHORT_NAME_MAPPING = {
+    # Easy names for volume_driver= in cinder.conf.
+    # Stick to [a-z][0-9]_, avoid "driver"
+    # Path starts at 'cinder.volume.drivers'
+    'block_device': 'block_device.BlockDeviceDriver',
+    'coraid': 'coraid.CoraidDriver',
+    'emc_smis_iscsi': 'emc.EMCSMISISCSIDriver',
+    'eql_san_iscsi': 'eqlx.DelLEQLSanISCSIDriver',
+    'glusterfs': 'glusterfs.GlusterfsDriver',
+    'gpfs': 'gpfs.GPFSDriver',
+    'hds_hus': 'hds.HUSDriver',
+    'hp_3par_fc': 'san.hp.hp_3par_fc.HP3PARFCDriver',
+    'hp_3par_iscsi': 'san.hp.hp_3par_iscsi.HP3PARISCSIDriver',
+    'hp_lefthand_iscsi': 'san.hp_lefthand.HpSanISCSIDriver',
+    'huawei_dorado_fc': 'huawei.huawei_dorado.HuaweiDoradoFCDriver',
+    'huawei_dorado_iscsi': 'huawei.huawei_dorado.HuaweiDoradoISCSIDriver',
+    'huawei_hvs_fc': 'huawei.huawei_hvs.HuaweiHVSFCDriver',
+    'huawei_hvs_iscsi': 'huawei.huawei_hva.HuaweiHVSISCSIDriver',
+    'huawei_t_fc': 'huawei.huawei_t.HuaweiTFCDriver',
+    'huawei_t_iscsi': 'huawei.huawet_t.HuaweiTISCSIDriver',
+    'netapp_direct_iscsi': 'netapp.iscsi.NetAppDirectISCSIDriver',
+    'netapp_direct_cmode_iscsi': 'netapp.iscsi.NetAppDirectCmodeISCSIDriver',
+    'netapp_direct_7mode_iscsi': 'netapp.iscsi.NetAppDirect7modeISCSIDriver',
+    'netapp_direct_cmode_nfs': 'netapp.nfs.NetAppDirectCmodeNfsDriver',
+    'netapp_direct_7mode_nfs': 'netapp.nfs.NetAppDirect7modeNfsDriver',
+    'lvm': 'lvm.LVMISCSIDriver',
+    'lvm_iscsi': 'lvm.LVMISCSIDriver',
+    'lvm_iser': 'lvm.LVMISERDriver',
+    'nfs': 'nfs.NfsDriver',
+    'rbd': 'rbd.RBDDriver',
+    'scality': 'scality.ScalityDriver',
+    'sheepdog': 'sheepdog.SheepdogDriver',
+    'solaris': 'san.solaris.SolarisISCSIDriver',
+    'solidfire': 'solidfire.SolidFireDriver',
+    'storwize': 'storwize_svc.StorwizeSVCDriver',
+    'vmware_esx_vmdk': 'vmware.vmdk.VMwareEsxVmdkDriver',
+    'vmware_vc_vmdk': 'vmware.vmdk.VMwareVcVmdkDriver',
+    'windows': 'windows.windows.WindowsDriver',
+    'xen_api_nfs': 'xenapi.sm.XenAPINFSDriver',
+    'xiv_ds8k': 'xiv_ds8k.XIVDS8KDriver',
+    'zadara_vpsa': 'zadara.ZadaraVPSAISCSIDriver'
+}
+
 
 class VolumeManager(manager.SchedulerDependentManager):
     """Manages attachable block storage devices."""
@@ -157,6 +200,16 @@ class VolumeManager(manager.SchedulerDependentManager):
             # Get from configuration, which will get the default
             # if its not using the multi backend
             volume_driver = self.configuration.volume_driver
+
+        lowercase_volume_driver = volume_driver.lower()
+        if lowercase_volume_driver in SHORT_NAME_MAPPING:
+            real_name = ('cinder.volume.drivers.' +
+                         SHORT_NAME_MAPPING[lowercase_volume_driver])
+            LOG.debug(_("Translated volume driver %(volume_driver)s "
+                        "to %(real_name)s") % {'volume_driver': volume_driver,
+                                               'real_name': real_name})
+            volume_driver = real_name
+
         if volume_driver in MAPPING:
             LOG.warn(_("Driver path %s is deprecated, update your "
                        "configuration to the new path."), volume_driver)
