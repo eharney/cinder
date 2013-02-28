@@ -416,6 +416,143 @@ class LioAdm(TargetAdmin):
         if tid is None:
             raise exception.NotFound()
 
+def TargetdHelper:
+    """iSCSI target administration using targetd"""
+
+    def __init__(self, execute=utils.execute):
+        LOG.debug("Initing targetd backend.")
+        super(TargetdHelper, self).__init__('false', execute) # what arg?
+        self.jsonhost = '127.0.0.1'  # TODO: change for remote
+        self.targetdport = 18700
+        self.targetdpath = '/targetrpc'
+        self.ssl = False  # TODO: conf option
+        self.targetduser = 'admin'  # TODO: conf option
+        self.targetdpassword = 'targetd' # TODO: conf option
+        self.pool = 'vg-targetd'  # TODO: conf option
+        self.jsid = 1
+
+    def jsonrequest(self, method, params=None):
+        print "+" * 20, method
+        data = json.dumps(dict(id=self.jsid,
+                               method=method,
+                               params=params,
+                               jsonrpc='2.0'))
+        self.jsid += 1
+        auth = ('%s:%s' % (self.targetduser, self.targetdpassword)).encode('base64')[:-1]
+        headers = {'Content-Type': 'application/json',
+                   'Authorization': 'Basic %s' % (auth,)}
+        #print('Sending JSON data: %s' % data)
+        if self.ssl:
+            scheme = 'https'
+        else:
+            scheme = 'http'
+            url = "%s://%s:%s%s" % \
+                (scheme, self.jsonhost, self.targetdport, self.targetdpath)
+
+        try:
+            request = urllib2.Request(url, data, headers)
+            response_obj = urllib2.urlopen(request)
+        except socket.error, e:
+            print "error, retrying with SSL"
+            url = ( "https://%s:%s%s" %
+                    (self.jsonhost, self.targetdport, self.targetdpath) )
+            request = urllib2.Request(url, data, headers)
+            response_obj = urllib2.urlopen(request)
+        response_data = response_obj.read()
+        LOG.debug('Got response: %s' % response_data)
+        response = json.loads(response_data)
+        if response.get('error') is not None:
+            if response['error']['code'] <= 0:
+                raise Exception(response['error'].get('message', ''))
+            else:  # +code is async execution id
+                print "Async completion, polling for results"
+                async_code = response['error']['code']
+                while True:
+                    time.sleep(1)
+                    results = jsonrequest('async_list')
+                    status = results.get(str(async_code), None)
+                    if status:
+                        if status[0]:
+                            print "%d has error %d" % (async_code, status[0])
+                            break
+                        else:
+                            print "%d still going, %d%% complete" % \
+                                    (async_code, status[1])
+                    else:
+                        print "%s done" % async_code
+                        break
+        else:
+            return response.get('result')
+
+    def _get_target(self, iqn):
+        # Go find the iqn...
+        #return "iqn_is_not_known_FIXME"
+        pass
+
+    def create_iscsi_target(self, name, tid, lun, path, chap_auth=None, **kwargs):
+        # Make a JSON call to targetd for creating a volume
+        pool = 'vg-targetd' # self.pool
+        try:
+            identifier = path.split('/')[-1]
+            a = self.jsonrequest('vol_create',
+                                 dict(pool=pool,
+                                      name="cinder-%s" % identifier,
+                                      size=1000000))
+            LOG.debug(type(a))
+            LOG.debug(a)
+        except urllib2.URLError as e:
+            LOG.error('urllib2.URLError...')
+            LOG.error(e)
+        except Exception as e:
+            LOG.error('something happened!??')
+            LOG.error(type(e))
+            LOG.error(e)
+        finally:
+            pass
+
+        results = self.jsonrequest('vol_list', dict(pool=pool))
+        LOG.debug('vol_list:')
+        for v in results:
+            LOG.debug(v)
+
+        # Also do export, here?
+        try:
+            a = self.jsonrequest('export_create',
+                                 dict(pool=pool,
+                                      vol="cinder-%s" % identifier,
+                                      initiator_wwn='iqn.2006-03.com.asdf.asdf.asdf:999',
+                                      lun=5))
+            time.sleep(5)
+
+            results = self.jsonrequest('export_list')
+            LOG.debug('export_list:')
+            for e in results:
+                LOG.debug(e)
+        except Exception as e:
+            LOG.error('export error...')
+            LOG.error(type(e))
+            LOG.error(e)
+            raise(e)
+        finally:
+            pass
+
+    def remove_iscsi_target(self, tid, lun, vol_id, **kwargs):
+        # export_destroy
+
+        # vol_destroy
+        pass
+
+    def show_target(self, tid, iqn=None, **kwargs):
+        if iqn is None:
+            raise exception.InvalidParameterValue(
+                err=_('valid iqn needed for show_target'))
+        tid = self._get_target(iqn)
+        if tid is None:
+            raise exception.NotFound()
+
+
+
+
 
 def get_target_admin():
     if FLAGS.iscsi_helper == 'tgtadm':
@@ -424,5 +561,7 @@ def get_target_admin():
         return FakeIscsiHelper()
     elif FLAGS.iscsi_helper == 'lioadm':
         return LioAdm()
+    elif FLAGS.iscsi_helper == 'targetd':
+        return TargetdHelper()
     else:
         return IetAdm()
