@@ -1,5 +1,6 @@
 """
 libstoragemgmt volume driver
+Requires libstoragemgmt 0.0.20 ?
 """
 
 import json
@@ -99,9 +100,23 @@ class LSMDriver(driver.VolumeDriver):
         # TODO
         raise NotImplementedError()
 
+    def _get_pool(self, pool_name):
+        for f in self.lsmclient.pools()
+            if p.name == pool_name:
+                return p
+        raise LibSMPoolNotFound()
+
+    def _get_initiator(self, initiator_name):
+        for f in self.lsmclient.initiators()
+            if i.id == initiator_name:
+                return i
+        raise LibSMInitiatorNotFound()
+
     def create_volume(self, volume):
         """Creates a logical volume."""
-        LOG.debug("creating volume... name: %s, size: %d", volume['name'], volume['size'])
+        LOG.debug("creating volume... name: %s, size: %d",
+                  volume['name'],
+                  volume['size'])
         try:
             LOG.debug("%s", self.lsmclient.pools())
         except lsm.LsmError as e:
@@ -117,10 +132,11 @@ class LSMDriver(driver.VolumeDriver):
 
         pool_name = 'vg-targetd'
 
-        for p in self.lsmclient.pools():
-            if p.name == pool_name:
-                pool = p
-                break
+        #for p in self.lsmclient.pools():
+        #    if p.name == pool_name:
+        #        pool = p
+        #        break
+        pool = self.get_pool(pool_name)
 
         size_in_bytes = volume['size'] * 1024 * 1024 * 1024
         LOG.debug("original size: %d" % volume['size'])
@@ -135,6 +151,7 @@ class LSMDriver(driver.VolumeDriver):
 
         if j is not None:
             LOG.debug("job created...")
+            raise LibSMSomethingBroke() # TODO
 
 
     def _clone(self, volume, src_pool, src_image, src_snap):
@@ -164,14 +181,18 @@ class LSMDriver(driver.VolumeDriver):
 
         volume_to_delete = None
 
-        for v in self.lsmclient.volumes():
-            if v.name == volume['name']:
-                volume_to_delete = v
-                break
+        #for v in self.lsmclient.volumes():
+        #    if v.name == volume['name']:
+        #        volume_to_delete = v
+        #        break
+
+        volume_to_delete = self._get_volume(volume['name'])
 
         if volume_to_delete is None:
             LOG.ERROR("volume %s not found" % volume['name'])
-            raise CouldntFindTheVolume() # TODO
+            raise LibSMCouldntFindTheVolume() # TODO
+
+        self.lsmclient.volume_delete(volume_to_delete)
         
     def create_snapshot(self, snapshot):
         """Creates an rbd snapshot"""
@@ -200,7 +221,40 @@ class LSMDriver(driver.VolumeDriver):
         pass
 
     def initialize_connection(self, volume, connector):
+        LOG.debug("initialize_connection...")
+        LOG.debug("initiator: %s" % connector['initiator'])
+        LOG.debug("volume: %s" % volume)
+
+        # TODO: import?
+        TYPE_ISCSI = 5
+        ACCESS_READ_WRITE = 2
+
+        initiator = self.get_initiator(connector['initiator'])
+        v = self._get_volume(volume['id'])  # TODO: probably wrong?
+
+        i = client.initiator_grant(initiator,
+                                   TYPE_ISCSI,
+                                   v,
+                                   ACCESS_READ_WRITE)
+
+        if i is not None:
+            LOG.error("%s" : i)
+            raise LibSMSomethingBroke()  # TODO
+
+        username = str(uuid.uuid1())[:8]  # TODO: replace w/ some other function
+        password = str(uuid.uuid1())[:8]
+
+        initator_to_adjust = self._get_initiator(initiator)
+
+        self.lsmclient.iscsi_chap_auth(initiator_to_adjust,
+                                       username,
+                                       password,
+                                       None,
+                                       None)
+
+
         # TODO: will need to specify LUN information here...
+        # TODO: lots
         return {
             'driver_volume_type': 'lsm',
             'data': {
