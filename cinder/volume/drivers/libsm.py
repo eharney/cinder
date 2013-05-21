@@ -4,10 +4,10 @@ Requires libstoragemgmt 0.0.20 ?
 """
 
 import json
+import lsm
 import os
 import tempfile
 import urllib
-import lsm
 
 from oslo.config import cfg
 
@@ -101,16 +101,28 @@ class LSMDriver(driver.VolumeDriver):
         raise NotImplementedError()
 
     def _get_pool(self, pool_name):
-        for f in self.lsmclient.pools()
+        for p in self.lsmclient.pools():
             if p.name == pool_name:
                 return p
-        raise LibSMPoolNotFound()
+        raise exception.LibSMPoolNotFound(pool_name)
 
     def _get_initiator(self, initiator_name):
-        for f in self.lsmclient.initiators()
+        for i in self.lsmclient.initiators():
             if i.id == initiator_name:
                 return i
-        raise LibSMInitiatorNotFound()
+        raise exception.LibSMInitiatorNotFound(initiator_name)
+
+    def _get_volume(self, volume_id):
+        for v in self.lsmclient.volumes():
+            if v.id == volume_id:
+                return v
+
+        raise exception.LibSMVolumeNotFound(volume_id)
+
+    def _get_volume_by_name(self, volume_name):
+         for v in self.lsmclient.volumes():
+             if v.name == volume_name:
+                 return v
 
     def create_volume(self, volume):
         """Creates a logical volume."""
@@ -136,22 +148,56 @@ class LSMDriver(driver.VolumeDriver):
         #    if p.name == pool_name:
         #        pool = p
         #        break
-        pool = self.get_pool(pool_name)
+        pool = self._get_pool(pool_name)
 
         size_in_bytes = volume['size'] * 1024 * 1024 * 1024
         LOG.debug("original size: %d" % volume['size'])
         LOG.debug("new size (bytes): %d" % size_in_bytes)
+
+        LOG.debug("params")
+        LOG.debug("pool: %s" % pool)
+        LOG.debug("name: %s" % volume['name'])
+        LOG.debug("pd: %s" % lsm.Volume.PROVISION_DEFAULT)
 
         (j, v) = self.lsmclient.volume_create(pool,
                                            volume['name'],
                                            size_in_bytes,
                                            lsm.Volume.PROVISION_DEFAULT)
 
-        LOG.debug("new volume:", v)
+        LOG.debug("new volume: %s", v)
 
         if j is not None:
             LOG.debug("job created...")
             raise LibSMSomethingBroke() # TODO
+
+        # libsm doesn't actually write anything to targetcli at this point,
+        # so, let's make it...
+        # er, no.  lsmcli -l VOLUMES
+
+        #initiator = 'iqn.2003.01.com.example.eric:test'
+
+        #self.lsmclient.initiator_grant(initiator,
+                                       #TYPE_ISCSI,
+                                       #v,
+                                       #ACCESS_READ_WRITE)
+
+        #if i is not None:
+        #    print "something went wrong..."
+
+        #initiator_to_adjust = get_initiator(initiator)
+
+        #username = str(uuid.uuid1())[:8]
+        #password = str(uuid.uuid1())[:8]
+
+        #LOG.debug("username: %s, password: %s" % (username, password))
+
+        #self.lsmclient.iscsi_chap_auth(initiator_to_adjust,
+        #                               username,
+        #                               password,
+        #                               None,
+        #                               None)
+
+
 
 
     def _clone(self, volume, src_pool, src_image, src_snap):
@@ -186,11 +232,11 @@ class LSMDriver(driver.VolumeDriver):
         #        volume_to_delete = v
         #        break
 
-        volume_to_delete = self._get_volume(volume['name'])
+        volume_to_delete = self._get_volume_by_name(volume['name'])
 
         if volume_to_delete is None:
             LOG.ERROR("volume %s not found" % volume['name'])
-            raise LibSMCouldntFindTheVolume() # TODO
+            raise LibSMCouldntFindTheVolume(volume)  # TODO
 
         self.lsmclient.volume_delete(volume_to_delete)
         
@@ -238,7 +284,7 @@ class LSMDriver(driver.VolumeDriver):
                                    ACCESS_READ_WRITE)
 
         if i is not None:
-            LOG.error("%s" : i)
+            LOG.error("%s" % i)
             raise LibSMSomethingBroke()  # TODO
 
         username = str(uuid.uuid1())[:8]  # TODO: replace w/ some other function

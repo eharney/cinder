@@ -562,3 +562,6 @@ class SwiftConnectionFailed(CinderException):
 
 class TransferNotFound(NotFound):
     message = _("Transfer %(transfer_id)s could not be found.")
+
+class LibSMVolumeNotFound(VolumeNotFound):
+    pass
