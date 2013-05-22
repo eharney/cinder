@@ -51,7 +51,9 @@ class LSMDriver(driver.VolumeDriver):
         self.configuration.append_config_values(lsm_opts)
 
         self.lsmclient = lsm.Client('targetd://admin@192.168.175.241', 'targetd')
-        self.lsmclient.volumes()
+        self._test_lsm()
+
+        self.pool_name = 'vg-targetd'
 
         self._stats = dict(
             volume_backend_name='LSM',
@@ -62,6 +64,10 @@ class LSMDriver(driver.VolumeDriver):
             free_capacity_gb='unknown',
             reserved_percentage=0)
 
+    def _test_lsm(self):
+        LOG.debug(self.lsmclient.volumes())
+        LOG.debug(self.lsmclient.initiators())
+
     def check_for_setup_error(self):
         """Returns an error if prerequisites aren't met"""
         #(stdout, stderr) = self._execute('rados', 'lspools')
@@ -70,23 +76,23 @@ class LSMDriver(driver.VolumeDriver):
         #    exception_message = (_("rbd has no pool %s") %
         #                         self.configuration.rbd_pool)
         #    raise exception.VolumeBackendAPIException(data=exception_message)
+        self._test_lsm()
         pass
 
     def _update_volume_stats(self):
+        self._test_lsm()
         stats = dict(
             total_capacity_gb='unknown',
             free_capacity_gb='unknown')
         try:
-            #stdout, _err = self._execute('rados', 'df', '--format', 'json')
-            #new_stats = json.loads(stdout)
-            total = 1024
-            free = 1024
-            stats['total_capacity_gb'] = total
-            stats['free_capacity_gb'] = free
-        except exception.ProcessExecutionError:
+            pool = self._get_pool(self.pool_name)
+            stats['total_capacity_gb'] = pool.total_space / 1024 / 1024 / 1024
+            stats['free_capacity_gb'] = pool.free_space / 1024 / 1024 / 1024
+        except lsm.LsmError:
             # just log and return unknown capacities
-            #LOG.exception(_('error refreshing volume stats'))
+            LOG.exception(_('error refreshing volume stats'))
             pass
+
         self._stats.update(stats)
 
     def get_volume_stats(self, refresh=False):
@@ -126,31 +132,36 @@ class LSMDriver(driver.VolumeDriver):
 
     def create_volume(self, volume):
         """Creates a logical volume."""
+        self._test_lsm()
+
         LOG.debug("creating volume... name: %s, size: %d",
                   volume['name'],
                   volume['size'])
-        try:
-            LOG.debug("%s", self.lsmclient.pools())
-        except lsm.LsmError as e:
-            LOG.error("LSM pools Error: %s", e)
-            raise e
 
-        try:
-            LOG.debug("%s", self.lsmclient.volumes())
-        except lsm.LsmError as e:
-            LOG.error("LSM volumes Error: %s", e)
-            raise e
+        #LOG.debug("initiators: %s" % self.lsmclient.initiators())
+
+        #try:
+        #    LOG.debug("%s", self.lsmclient.pools())
+        #except lsm.LsmError as e:
+        #    LOG.error("LSM pools Error: %s", e)
+        #    raise e
+
+        #try:
+        #    LOG.debug("%s", self.lsmclient.volumes())
+        #except lsm.LsmError as e:
+        #    LOG.error("LSM volumes Error: %s", e)
+        #    raise e
 
 
-        pool_name = 'vg-targetd'
 
         #for p in self.lsmclient.pools():
         #    if p.name == pool_name:
         #        pool = p
         #        break
-        pool = self._get_pool(pool_name)
+        pool = self._get_pool(self.pool_name)
 
         size_in_bytes = volume['size'] * 1024 * 1024 * 1024
+        size_in_bytes = 1024 * 1024  # TODO: for testing simplicity
         LOG.debug("original size: %d" % volume['size'])
         LOG.debug("new size (bytes): %d" % size_in_bytes)
 
@@ -169,6 +180,13 @@ class LSMDriver(driver.VolumeDriver):
         if j is not None:
             LOG.debug("job created...")
             raise LibSMSomethingBroke() # TODO
+
+        pl_ip = self.configuration.iscsi_ip_address
+        pl_port = self.configuration.iscsi_port
+        pl_target_iqn = self.configuration.iscsi_target_prefix + volume['name']
+        pl_portal = 'aslfdjaslfd_portal'
+
+        volume['provider_location'] = "%s:%s,%s %s" % (pl_ip, pl_port, pl_portal, pl_target_iqn)
 
         # libsm doesn't actually write anything to targetcli at this point,
         # so, let's make it...
@@ -196,6 +214,9 @@ class LSMDriver(driver.VolumeDriver):
         #                               password,
         #                               None,
         #                               None)
+
+        #return { 'provider_location': volume['provider_location'] }
+        return None
 
 
 
@@ -235,8 +256,8 @@ class LSMDriver(driver.VolumeDriver):
         volume_to_delete = self._get_volume_by_name(volume['name'])
 
         if volume_to_delete is None:
-            LOG.ERROR("volume %s not found" % volume['name'])
-            raise LibSMCouldntFindTheVolume(volume)  # TODO
+            LOG.error("volume %s not found" % volume['name'])
+            raise exception.LibSMVolumeNotFound(volume['name'])  # TODO
 
         self.lsmclient.volume_delete(volume_to_delete)
         
@@ -260,7 +281,15 @@ class LSMDriver(driver.VolumeDriver):
 
     def create_export(self, context, volume):
         """Exports the volume"""
-        pass
+
+        host = '127.0.0.1'
+        port = '3260'
+        target_name = volume['name']
+        lun = '9'
+
+        loc = '%s:%s,1 %s %s' %(host, port, target_name, lun)
+
+        return {'provider_location': loc}
 
     def remove_export(self, context, volume):
         """Removes an export for a logical volume"""
