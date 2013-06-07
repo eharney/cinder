@@ -8,6 +8,7 @@ import lsm
 import os
 import tempfile
 import urllib
+import uuid
 
 from oslo.config import cfg
 
@@ -50,7 +51,7 @@ class LSMDriver(driver.VolumeDriver):
         super(LSMDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(lsm_opts)
 
-        self.lsmclient = lsm.Client('targetd://admin@192.168.175.241', 'targetd')
+        self.lsmclient = lsm.Client('targetd://admin@192.168.122.169', 'targetd')
         self._test_lsm()
 
         self.pool_name = 'vg-targetd'
@@ -116,19 +117,27 @@ class LSMDriver(driver.VolumeDriver):
         for i in self.lsmclient.initiators():
             if i.id == initiator_name:
                 return i
+        LOG.error("Couldn't find initiator %s" % initiator_name)
+        LOG.error("initiators: %s" % self.lsmclient.initiators())
         raise exception.LibSMInitiatorNotFound(initiator_name)
 
     def _get_volume(self, volume_id):
         for v in self.lsmclient.volumes():
+            LOG.debug("looking at vol %s" % v.id)
             if v.id == volume_id:
                 return v
 
+        LOG.error("Couldn't find volume %s" % volume_id)
+        #LOG.error("volumes: %s" % self.lsmclient.volumes())
         raise exception.LibSMVolumeNotFound(volume_id)
 
     def _get_volume_by_name(self, volume_name):
          for v in self.lsmclient.volumes():
+             LOG.debug("looking at vol %s" % v.name)
              if v.name == volume_name:
                  return v
+
+         raise exception.LibSMVolumeNotFound(volume_name)
 
     def create_volume(self, volume):
         """Creates a logical volume."""
@@ -304,13 +313,13 @@ class LSMDriver(driver.VolumeDriver):
         TYPE_ISCSI = 5
         ACCESS_READ_WRITE = 2
 
-        initiator = self.get_initiator(connector['initiator'])
-        v = self._get_volume(volume['id'])  # TODO: probably wrong?
+        #initiator = self._get_initiator(connector['initiator'])
+        v = self._get_volume_by_name('volume-%s' % volume['id'])  # TODO: probably wrong?
 
-        i = client.initiator_grant(initiator,
-                                   TYPE_ISCSI,
-                                   v,
-                                   ACCESS_READ_WRITE)
+        i = self.lsmclient.initiator_grant(connector['initiator'],
+                                           TYPE_ISCSI,
+                                           v,
+                                           ACCESS_READ_WRITE)
 
         if i is not None:
             LOG.error("%s" % i)
@@ -319,7 +328,7 @@ class LSMDriver(driver.VolumeDriver):
         username = str(uuid.uuid1())[:8]  # TODO: replace w/ some other function
         password = str(uuid.uuid1())[:8]
 
-        initator_to_adjust = self._get_initiator(initiator)
+        initiator_to_adjust = self._get_initiator(connector['initiator'])
 
         self.lsmclient.iscsi_chap_auth(initiator_to_adjust,
                                        username,
@@ -331,15 +340,16 @@ class LSMDriver(driver.VolumeDriver):
         # TODO: will need to specify LUN information here...
         # TODO: lots
         return {
-            'driver_volume_type': 'lsm',
+            'driver_volume_type': 'iscsi',
             'data': {
-                'name': '%s/%s' % (self.configuration.rbd_pool,
+                'name': '%s/%s' % ('fixme',
                                    volume['name']),
-                'auth_enabled': (self.configuration.rbd_secret_uuid
-                                 is not None),
-                'auth_username': self.configuration.rbd_user,
-                'secret_type': 'ceph',
-                'secret_uuid': self.configuration.rbd_secret_uuid, }
+                'auth_enabled': 'fixme',
+                'auth_username': 'username-fixme',
+                'secret_type': 'fixme',
+                'secret_uuid': 'fixme',
+                'target_iqn': 'iqn.asdf.fixme',
+                'target_portal': 'target_portal_fixme' }
         }
 
     def terminate_connection(self, volume, connector, **kwargs):

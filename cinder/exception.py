@@ -565,3 +565,6 @@ class TransferNotFound(NotFound):
 
 class LibSMVolumeNotFound(VolumeNotFound):
     pass
+
+class LibSMInitiatorNotFound(NotFound):
+    pass
