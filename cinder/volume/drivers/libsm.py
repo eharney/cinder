@@ -324,8 +324,8 @@ class LSMDriver(driver.VolumeDriver):
             LOG.error("%s" % i)
             raise LibSMSomethingBroke()  # TODO
 
-        username = str(uuid.uuid1())[:8]  # TODO: replace w/ some other function
-        password = str(uuid.uuid1())[:8]
+        username = utils.generate_username(8)
+        password = utils.generate_password(8)
 
         initiator_to_adjust = self._get_initiator(connector['initiator'])
 
