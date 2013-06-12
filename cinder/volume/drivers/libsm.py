@@ -25,13 +25,22 @@ lsm_opts = [
                default='rbd',
                help='the RADOS pool in which rbd volumes are stored'),
     cfg.StrOpt('lsm_uri',
-               default=None,
+               default='targetd://admin@192.168.122.169',  # TODO: change default
+               help='...'),
+    cfg.StrOpt('lsm_pool_name',
+               default = 'vg-targetd',  # TODO: change default
                help='...'),
     cfg.StrOpt('lsm_user',
                default=None,
                help='the RADOS client name for accessing rbd volumes'),
     cfg.StrOpt('lsm_password',
                default=None,
+               help='...'),
+    cfg.StrOpt('lsm_target_iqn',
+               default = 'iqn.2003-01.org.example.eric:1234',  # TODO: change default
+               help='...'),
+    cfg.StrOpt('lsm_target_portal',
+               default = '192.168.122.169:3260',  # TODO: change default
                help='...'),
     cfg.StrOpt('rbd_secret_uuid',
                default=None,
@@ -51,10 +60,10 @@ class LSMDriver(driver.VolumeDriver):
         super(LSMDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(lsm_opts)
 
-        self.lsmclient = lsm.Client('targetd://admin@192.168.122.169', 'targetd')
+        self.lsmclient = lsm.Client(self.configuration.lsm_uri, 'targetd')  # TODO: config
         self._test_lsm()
 
-        self.pool_name = 'vg-targetd'
+        self.pool_name = self.configuration.lsm_pool_name  # TODO: remove
 
         self._stats = dict(
             volume_backend_name='LSM',
@@ -278,12 +287,6 @@ class LSMDriver(driver.VolumeDriver):
         """Deletes an rbd snapshot"""
         return NotImplementedError()
 
-    def local_path(self, volume):
-        """Returns the path of the rbd volume."""
-        # This is the same as the remote path
-        # since qemu accesses it directly.
-        return "rbd:%s/%s" % (self.configuration.rbd_pool, volume['name'])
-
     def ensure_export(self, context, volume):
         """Synchronously recreates an export for a logical volume."""
         pass
@@ -314,7 +317,7 @@ class LSMDriver(driver.VolumeDriver):
         ACCESS_READ_WRITE = 2
 
         #initiator = self._get_initiator(connector['initiator'])
-        v = self._get_volume_by_name('volume-%s' % volume['id'])  # TODO: probably wrong?
+        v = self._get_volume_by_name('volume-%s' % volume['id'])  # TODO: verify
 
         i = self.lsmclient.initiator_grant(connector['initiator'],
                                            TYPE_ISCSI,
@@ -336,65 +339,31 @@ class LSMDriver(driver.VolumeDriver):
                                        None,
                                        None)
 
+        initiator = self._get_initiator(connector['initiator'])
+        volume = self._get_volume_by_name('volume-%s' % volume['id'])
+
+        LOG.debug("initiator: %s" % initiator)
+        LOG.debug("volume: %s" % volume)
+
 
         # TODO: will need to specify LUN information here...
         # TODO: lots
         return {
             'driver_volume_type': 'iscsi',
             'data': {
-                'name': '%s/%s' % ('fixme',
-                                   volume['name']),
+                'name': '%s/%s' % ('fixme',   # TODO
+                                   volume),
                 'auth_enabled': 'fixme',
                 'auth_username': 'username-fixme',
                 'secret_type': 'fixme',
                 'secret_uuid': 'fixme',
-                'target_iqn': 'iqn.asdf.fixme',
-                'target_portal': 'target_portal_fixme' }
+                'target_iqn': self.configuration.lsm_target_iqn,  # comes from targetd.yaml TODO: config
+                'target_portal': self.configuration.lsm_target_portal # TODO: config
+             }
         }
 
     def terminate_connection(self, volume, connector, **kwargs):
         pass
-
-    def _parse_location(self, location):
-        prefix = 'rbd://'
-        if not location.startswith(prefix):
-            reason = _('Not stored in rbd')
-            raise exception.ImageUnacceptable(image_id=location, reason=reason)
-        pieces = map(urllib.unquote, location[len(prefix):].split('/'))
-        if any(map(lambda p: p == '', pieces)):
-            reason = _('Blank components')
-            raise exception.ImageUnacceptable(image_id=location, reason=reason)
-        if len(pieces) != 4:
-            reason = _('Not an rbd snapshot')
-            raise exception.ImageUnacceptable(image_id=location, reason=reason)
-        return pieces
-
-    def _get_fsid(self):
-        stdout, _ = self._execute('ceph', 'fsid')
-        return stdout.rstrip('\n')
-
-    def _is_cloneable(self, image_location):
-        try:
-            fsid, pool, image, snapshot = self._parse_location(image_location)
-        except exception.ImageUnacceptable:
-            return False
-
-        if self._get_fsid() != fsid:
-            reason = _('%s is in a different ceph cluster') % image_location
-            LOG.debug(reason)
-            return False
-
-        # check that we can read the image
-        try:
-            self._execute('rbd', 'info',
-                          '--pool', pool,
-                          '--image', image,
-                          '--snap', snapshot)
-        except exception.ProcessExecutionError:
-            LOG.debug(_('Unable to read image %s') % image_location)
-            return False
-
-        return True
 
     def clone_image(self, volume, image_location):
         return NotImplementedError()
