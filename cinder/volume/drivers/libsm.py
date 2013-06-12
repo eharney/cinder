@@ -8,7 +8,6 @@ import lsm
 import os
 import tempfile
 import urllib
-import uuid
 
 from oslo.config import cfg
 
@@ -276,6 +275,12 @@ class LSMDriver(driver.VolumeDriver):
         if volume_to_delete is None:
             LOG.error("volume %s not found" % volume['name'])
             raise exception.LibSMVolumeNotFound(volume['name'])  # TODO
+
+        # unexport first
+        for initiator in self.lsmclient.initiators_granted_to_volume(volume_to_delete):
+            LOG.debug("removing initiator %s from volume %s" % (initiator.name, volume_to_delete))
+            self.lsmclient.initiator_revoke(initiator, volume_to_delete)
+
 
         self.lsmclient.volume_delete(volume_to_delete)
         
