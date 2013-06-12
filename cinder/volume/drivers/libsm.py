@@ -312,17 +312,13 @@ class LSMDriver(driver.VolumeDriver):
         LOG.debug("initiator: %s" % connector['initiator'])
         LOG.debug("volume: %s" % volume)
 
-        # TODO: import?
-        TYPE_ISCSI = 5
-        ACCESS_READ_WRITE = 2
-
         #initiator = self._get_initiator(connector['initiator'])
         v = self._get_volume_by_name('volume-%s' % volume['id'])  # TODO: verify
 
         i = self.lsmclient.initiator_grant(connector['initiator'],
-                                           TYPE_ISCSI,
+                                           lsm.data.Initiator.TYPE_ISCSI,
                                            v,
-                                           ACCESS_READ_WRITE)
+                                           lsm.Volume.ACCESS_READ_WRITE)
 
         if i is not None:
             LOG.error("%s" % i)
