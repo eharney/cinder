@@ -6,6 +6,7 @@ Requires libstoragemgmt 0.0.20 ?
 import json
 import lsm
 import os
+import pprint
 import tempfile
 import urllib
 
@@ -20,9 +21,6 @@ from cinder.volume import driver
 LOG = logging.getLogger(__name__)
 
 lsm_opts = [
-    cfg.StrOpt('rbd_pool',
-               default='rbd',
-               help='the RADOS pool in which rbd volumes are stored'),
     cfg.StrOpt('lsm_uri',
                default='targetd://admin@192.168.122.169',  # TODO: change default
                help='...'),
@@ -113,12 +111,42 @@ class LSMDriver(driver.VolumeDriver):
 
     def create_cloned_volume(self, volume, src_vref):
         # TODO
-        raise NotImplementedError()
+        LOG.debug("creating cloned volume... dest: %s src: %s" % (volume, src_vref))
+        pool = self._get_pool(self.pool_name)
+        source_volume = self._get_volume_by_name(src_vref['name'])
+
+        LOG.debug("replicate time...")
+
+        # TODO: use REPLICATE_CLONE when supported, COPY but only offline when not
+
+        (j,v) = self.lsmclient.volume_replicate(pool,
+                                                lsm.Volume.REPLICATE_CLONE,
+                                                source_volume,
+                                                volume['name'])
+
+        if src_vref.status != 'available':
+           LOG.error("source volume status is %s" % volume.status)
+           raise VolumeIsNotAvailable()  # TODO
+
+        try:
+            # TODO: may only work if volume is offline -- need to check for this
+            (j,v) = self.lsmclient.volume_replicate(pool,
+                                                    lsm.Volume.REPLICATE_COPY,
+                                                    source_volume,
+                                                    volume['name'])
+        except Exception as e:
+            LOG.error("replicate exception: %s" % e)
+            raise(e)
+
+        # TODO: what else?
 
     def _get_pool(self, pool_name):
         for p in self.lsmclient.pools():
             if p.name == pool_name:
                 return p
+
+        LOG.error("couldn't find pool with name %s" % pool_name)
+
         raise exception.LibSMPoolNotFound(pool_name)
 
     def _get_initiator(self, initiator_name):
@@ -145,7 +173,19 @@ class LSMDriver(driver.VolumeDriver):
              if v.name == volume_name:
                  return v
 
+         LOG.error("failed to find volume with name %s" % volume_name)
+
          raise exception.LibSMVolumeNotFound(volume_name)
+
+    def _get_snapshot_by_name(self, snapshot_name):
+         raise NotImplementedError()
+         for s in self.lsmclient.snapshots():   # TODO FIXME: doesn't work.  Where is the snapshot data?
+             if s.name == snapshot_name:
+                 return s
+
+         LOG.error("failed to find snapshot with name %s" % snapshot_name)
+
+         raise exception.LibSMSnapshotNotFound(snapshot_name)
 
     def create_volume(self, volume):
         """Creates a logical volume."""
@@ -155,26 +195,6 @@ class LSMDriver(driver.VolumeDriver):
                   volume['name'],
                   volume['size'])
 
-        #LOG.debug("initiators: %s" % self.lsmclient.initiators())
-
-        #try:
-        #    LOG.debug("%s", self.lsmclient.pools())
-        #except lsm.LsmError as e:
-        #    LOG.error("LSM pools Error: %s", e)
-        #    raise e
-
-        #try:
-        #    LOG.debug("%s", self.lsmclient.volumes())
-        #except lsm.LsmError as e:
-        #    LOG.error("LSM volumes Error: %s", e)
-        #    raise e
-
-
-
-        #for p in self.lsmclient.pools():
-        #    if p.name == pool_name:
-        #        pool = p
-        #        break
         pool = self._get_pool(self.pool_name)
 
         size_in_bytes = volume['size'] * 1024 * 1024 * 1024
@@ -188,9 +208,9 @@ class LSMDriver(driver.VolumeDriver):
         LOG.debug("pd: %s" % lsm.Volume.PROVISION_DEFAULT)
 
         (j, v) = self.lsmclient.volume_create(pool,
-                                           volume['name'],
-                                           size_in_bytes,
-                                           lsm.Volume.PROVISION_DEFAULT)
+                                              volume['name'],
+                                              size_in_bytes,
+                                              lsm.Volume.PROVISION_DEFAULT)
 
         LOG.debug("new volume: %s", v)
 
@@ -236,23 +256,6 @@ class LSMDriver(driver.VolumeDriver):
         return None
 
 
-
-
-    def _clone(self, volume, src_pool, src_image, src_snap):
-        self._try_execute('rbd', 'clone',
-                          '--pool', src_pool,
-                          '--image', src_image,
-                          '--snap', src_snap,
-                          '--dest-pool', self.configuration.rbd_pool,
-                          '--dest', volume['name'])
-
-    def _resize(self, volume):
-        size = int(volume['size']) * 1024
-        self._try_execute('rbd', 'resize',
-                          '--pool', self.configuration.rbd_pool,
-                          '--image', volume['name'],
-                          '--size', size)
-
     def create_volume_from_snapshot(self, volume, snapshot):
         """Creates a volume from a snapshot."""
         self._clone(volume, self.configuration.rbd_pool,
@@ -263,18 +266,15 @@ class LSMDriver(driver.VolumeDriver):
     def delete_volume(self, volume):
         """Deletes a logical volume."""
 
-        volume_to_delete = None
-
-        #for v in self.lsmclient.volumes():
-        #    if v.name == volume['name']:
-        #        volume_to_delete = v
-        #        break
-
-        volume_to_delete = self._get_volume_by_name(volume['name'])
-
-        if volume_to_delete is None:
+	try:
+            volume_to_delete = self._get_volume_by_name(volume['name'])
+        except exception.LibSMVolumeNotFound:
             LOG.error("volume %s not found" % volume['name'])
-            raise exception.LibSMVolumeNotFound(volume['name'])  # TODO
+            return
+
+        #if volume_to_delete is None:
+        #    LOG.error("volume %s not found" % volume['name'])
+        #    raise exception.LibSMVolumeNotFound(volume['name'])  # TODO
 
         # unexport first
         for initiator in self.lsmclient.initiators_granted_to_volume(volume_to_delete):
@@ -285,12 +285,64 @@ class LSMDriver(driver.VolumeDriver):
         self.lsmclient.volume_delete(volume_to_delete)
         
     def create_snapshot(self, snapshot):
-        """Creates an rbd snapshot"""
-        return NotImplementedError()
+        """Creates a snapshot"""
+        LOG.debug("creating snapshot... snapshot: %s" % snapshot)
+        LOG.debug("creating snapshot... volume id: %s" % snapshot.volume_id)
+        pool = self._get_pool(self.pool_name)
+        volume = self._get_volume_by_name('volume-%s' % snapshot.volume_id)
+        LOG.debug("creating snapshot... found volume: %s" % volume)
+
+	snap_id = None
+
+        try:
+            # TODO: returns (j, v)
+            (j, v) = self.lsmclient.volume_replicate(pool,
+                                                     lsm.Volume.REPLICATE_SNAPSHOT,
+                                                     volume,
+                                                     'snapshot-%s' % snapshot.id)
+
+            if j is not None:
+                LOG.error("unexpected job created")
+                raise LibSMSomethingBroke("implement async snaps") # TODO
+
+            snap_id = v.id
+        except lsm.LsmError as e:
+            LOG.error("snapshot replicate LsmError: %s" % e)
+            if e.code ==  lsm.ErrorNumber.NO_SUPPORT:  # 153
+                LOG.warn("not supported... try other method")
+                # TODO: fall back to block copy if volume is not online
+            raise(e)
+        except Exception as e:
+            LOG.error("snapshot replicate exception: %s" % e)
+            raise(e)
+
+        if snap_id is not None:
+            # TODO: return what?
+            return snap_id
 
     def delete_snapshot(self, snapshot):
-        """Deletes an rbd snapshot"""
-        return NotImplementedError()
+        """Deletes a snapshot"""
+        # Look for snapshots named snapshot-<id>, then
+        # volumes named snapshot-<id>
+
+        s = None
+
+        try:
+            s = self._get_snapshot_by_name('snapshot-%s' % snapshot.id)
+        except exception.LibSMSnapshotNotFound:
+            # look for volume
+            pass
+
+        if s is not None:
+            s.deletesomehow()  # TODO
+
+        try:
+            v = self._get_volume_by_name('snapshot-%s' % snapshot.id)
+        except exception.LibSMVolumeNotFound:
+            raise exception.LibSMSnapshotNotFound(snapshot.id)
+
+        if v is not None:
+            self.lsmclient.volume_delete(v)
 
     def ensure_export(self, context, volume):
         """Synchronously recreates an export for a logical volume."""

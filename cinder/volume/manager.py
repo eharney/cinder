@@ -174,6 +174,7 @@ class VolumeManager(manager.SchedulerDependentManager):
                 volume_ref,
                 snapshot_ref)
         elif srcvol_ref is not None:
+            # Shouldn't this also do status='downloading' or similar?  Does it?
             model_update = self.driver.create_cloned_volume(volume_ref,
                                                             srcvol_ref)
         else:

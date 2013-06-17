@@ -564,7 +564,11 @@ class TransferNotFound(NotFound):
     message = _("Transfer %(transfer_id)s could not be found.")
 
 class LibSMVolumeNotFound(VolumeNotFound):
-    pass
+    message = _("libsm volume could not be found.")
 
 class LibSMInitiatorNotFound(NotFound):
-    pass
+    message = _("libsm initiator could not be found.")
+
+class LibSMSnapshotNotFound(SnapshotNotFound):
+    message = _("libsm snapshot could not be found.")
+
