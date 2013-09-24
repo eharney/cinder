@@ -265,6 +265,18 @@ class VolumeManager(manager.SchedulerDependentManager):
             self.db.volume_update(context, volume_ref['id'],
                                   {'status': 'available'})
             return True
+        except exception.InvalidConfigurationValue as e:
+            self.db.volume_update(context,
+                                  volume_ref['id'],
+                                  {'status': 'error_deleting'})
+
+            LOG.error(_('Cannot delete volume %(id)s: %(error)s') %
+                {'id': volume_ref['id'],
+                 'error': str(e)}
+                )
+            # We should not send more requests to this driver instance
+            self.driver.set_initialized(False)
+            return True
         except Exception:
             with excutils.save_and_reraise_exception():
                 self.db.volume_update(context,
