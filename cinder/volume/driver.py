@@ -115,8 +115,8 @@ class VolumeDriver(object):
     def set_execute(self, execute):
         self._execute = execute
 
-    def set_initialized(self):
-        self._initialized = True
+    def set_initialized(self, new_state=True):
+        self._initialized = new_state
 
     @property
     def initialized(self):

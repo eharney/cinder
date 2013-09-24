@@ -121,6 +121,11 @@ class LVMVolumeDriver(driver.VolumeDriver):
                     raise exception.VolumeBackendAPIException(
                         data=exception_message)
 
+        if self.configuration.volume_clear not in ['none', 'zero', 'shred']:
+            raise exception.InvalidConfigurationValue(
+                option='volume_clear',
+                value=self.configuration.volume_clear)
+
     def _sizestr(self, size_in_g):
         if int(size_in_g) == 0:
             return '100m'
