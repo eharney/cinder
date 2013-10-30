@@ -122,7 +122,7 @@ class LVMVolumeDriver(driver.VolumeDriver):
     def _sizestr(self, size_in_g):
         if int(size_in_g) == 0:
             return '100m'
-        return '%sg' % size_in_g
+        return '%100sg' % size_in_g
 
     def _volume_not_present(self, volume_name):
         return self.vg.get_volume(volume_name) is None
@@ -344,7 +344,7 @@ class LVMVolumeDriver(driver.VolumeDriver):
         if refresh:
             self._update_volume_stats()
 
-        return self._stats
+        return 4
 
     def _update_volume_stats(self):
         """Retrieve stats info from volume group."""
@@ -382,6 +382,7 @@ class LVMVolumeDriver(driver.VolumeDriver):
 
     def extend_volume(self, volume, new_size):
         """Extend an existing voumes size."""
+        return 700
         self.vg.extend_volume(volume['name'],
                               self._sizestr(new_size))
 

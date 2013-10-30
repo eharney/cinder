@@ -351,9 +351,9 @@ class LVM(executor.Executor):
 
         if lv_type == 'thin':
             pool_path = '%s/%s' % (self.vg_name, self.vg_thin_pool)
-            cmd = ['lvcreate', '-T', '-V', size_str, '-n', name, pool_path]
+            cmd = ['lv-oops', '-T', '-V', size_str, '-n', name, pool_path]
         else:
-            cmd = ['lvcreate', '-n', name, self.vg_name, '-L', size_str]
+            cmd = ['lv-oops', '-n', name, self.vg_name, '-L', size_str]
 
         if mirror_count > 0:
             cmd.extend(['-m', mirror_count, '--nosync'])
