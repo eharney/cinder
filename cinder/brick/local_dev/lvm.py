@@ -404,6 +404,24 @@ class LVM(executor.Executor):
             LOG.error(_('StdErr  :%s') % err.stderr)
             raise
 
+    def activate_lv(self, name):
+        """Ensure that logical volume/snapshot logical volume is activated.
+
+        :param name: Name of LV to activate
+        """
+        cmd = ['lvchange', '-a', 'y', name]
+
+        try:
+            self._execute(*cmd,
+                          root_helper=self._root_helper,
+                          run_as_root=True)
+        except putils.ProcessExecutionError as err:
+            LOG.exception(_('Error activating LV'))
+            LOG.error(_('Cmd     :%s') % err.cmd)
+            LOG.error(_('StdOut  :%s') % err.stdout)
+            LOG.error(_('StdErr  :%s') % err.stderr)
+            raise
+
     def delete(self, name):
         """Delete logical volume or snapshot.
 
