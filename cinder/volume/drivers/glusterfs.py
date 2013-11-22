@@ -106,6 +106,8 @@ class GlusterfsDriver(nfs.RemoteFsDriver):
             else:
                 raise
 
+        self._ensure_shares_mounted()
+
     def check_for_setup_error(self):
         """Just to override parent behavior."""
         pass
@@ -970,6 +972,7 @@ class GlusterfsDriver(nfs.RemoteFsDriver):
                 self._ensure_share_mounted(share)
                 self._mounted_shares.append(share)
             except Exception as exc:
+                # TODO(eharney): this should be converted to raise an exception
                 LOG.warning(_('Exception during mounting %s') % (exc,))
 
         LOG.debug(_('Available shares: %s') % str(self._mounted_shares))

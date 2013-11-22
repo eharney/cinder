@@ -19,6 +19,7 @@
 import errno
 import json
 import os
+import tempfile
 
 import mox as mox_lib
 from mox import IgnoreArg
@@ -411,6 +412,52 @@ class GlusterFsDriverTestCase(test.TestCase):
 
         self.assertRaises(exception.GlusterfsException,
                           drv.do_setup, IsA(context.RequestContext))
+
+        mox.VerifyAll()
+
+    def _fake_load_shares_config(self, conf):
+        self._driver.shares = {'127.7.7.7:/gluster1': None}
+
+    def _fake_NamedTemporaryFile(self, prefix=None, dir=None):
+        raise OSError('Permission denied! No soup for you!')
+
+    def test_setup_set_share_permissions(self):
+        mox = self._mox
+        drv = self._driver
+
+        glusterfs.CONF.glusterfs_shares_config = self.TEST_SHARES_CONFIG_FILE
+
+        self.stubs.Set(drv, '_load_shares_config',
+                       self._fake_load_shares_config)
+        self.stubs.Set(tempfile, 'NamedTemporaryFile',
+                       self._fake_NamedTemporaryFile)
+        mox.StubOutWithMock(os.path, 'exists')
+        mox.StubOutWithMock(drv, '_execute')
+        mox.StubOutWithMock(utils, 'get_file_gid')
+        mox.StubOutWithMock(utils, 'get_file_mode')
+        mox.StubOutWithMock(os, 'getegid')
+
+        drv._execute('mount.glusterfs', check_exit_code=False)
+
+        drv._execute('mkdir', '-p', mox_lib.IgnoreArg())
+
+        os.path.exists(self.TEST_SHARES_CONFIG_FILE).AndReturn(True)
+
+        drv._execute('mount', '-t', 'glusterfs', '127.7.7.7:/gluster1',
+                     mox_lib.IgnoreArg(), run_as_root=True)
+
+        utils.get_file_gid(mox_lib.IgnoreArg()).AndReturn(33333)
+        # perms not writable
+        utils.get_file_mode(mox_lib.IgnoreArg()).AndReturn(0o000)
+
+        os.getegid().AndReturn(888)
+
+        drv._execute('chgrp', 888, mox_lib.IgnoreArg(), run_as_root=True)
+        drv._execute('chmod', 'g+w', mox_lib.IgnoreArg(), run_as_root=True)
+
+        mox.ReplayAll()
+
+        drv.do_setup(IsA(context.RequestContext))
 
         mox.VerifyAll()
 
