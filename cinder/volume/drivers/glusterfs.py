@@ -106,6 +106,8 @@ class GlusterfsDriver(nfs.RemoteFsDriver):
             else:
                 raise
 
+        self._ensure_shares_mounted()
+
     def check_for_setup_error(self):
         """Just to override parent behavior."""
         pass

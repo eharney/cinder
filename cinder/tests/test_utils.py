@@ -514,12 +514,13 @@ class GenericUtilsTestCase(test.TestCase):
         self.mox.VerifyAll()
 
     def _make_fake_stat(self, test_file, orig_os_stat):
-        """Generate a function that will return a particular
+        """Create a fake method to stub out os.stat().
+
+           Generate a function that will return a particular
            stat object for a given file.
 
            :param: test_file: file to spoof stat() for
            :param: orig_os_stat: pointer to original os.stat()
-                    This must be provided to prevent recursion errors
         """
 
         def fake_stat(path):
@@ -527,7 +528,6 @@ class GenericUtilsTestCase(test.TestCase):
                 class stat_result:
                     st_mode = 0o777
                     st_gid = 33333
-                    pass
                 return stat_result
             else:
                 return orig_os_stat(path)
