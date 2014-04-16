@@ -51,6 +51,21 @@ nova_opts = [
     cfg.BoolOpt('nova_api_insecure',
                 default=False,
                 help='Allow to perform insecure SSL requests to nova'),
+    #cfg.StrOpt('nova_auth_strategy',
+    #           default='keystone',
+    #           help='Authorization strategy for connecting to Nova in '
+    #                'admin context'),
+    cfg.StrOpt('nova_admin_username',
+               help='Username for connecting to Nova in admin context'),
+    cfg.StrOpt('nova_admin_password',
+               help='Password for connecting to Nova in admin context'),
+    #cfg.StrOpt('nova_admin_tenant_id',
+    #           help='Tenant id for connecting to Nova in admin context'),
+    #cfg.StrOpt('nova_admin_tenant_name',
+    #           help='Tenant name for connecting to Nova in admin context. '
+    #                'This option is mutually exclusive with '
+    #                'nova_admin_tenant_id. Note that with Keystone V3, '
+    #                'tenant names are only unique within a domain.')
 ]
 
 CONF = cfg.CONF
@@ -75,6 +90,8 @@ def novaclient(context, admin=False):
     if admin:
         nova_endpoint_template = CONF.nova_endpoint_admin_template
         nova_catalog_info = CONF.nova_catalog_admin_info
+        context.username = CONF.nova_admin_username
+        context.password = CONF.nova_admin_password
 
     if nova_endpoint_template:
         url = nova_endpoint_template % context.to_dict()
@@ -114,6 +131,9 @@ def novaclient(context, admin=False):
 
 class API(base.Base):
     """API for interacting with novaclient."""
+
+    #def __init__(self, admin=False):
+    #    super(API, self).__init__()
 
     def update_server_volume(self, context, server_id, attachment_id,
                              new_volume_id):
