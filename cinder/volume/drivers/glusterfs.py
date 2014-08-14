@@ -75,7 +75,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
         self._remotefsclient = None
         super(GlusterfsDriver, self).__init__(*args, **kwargs)
         self.configuration.append_config_values(volume_opts)
-        self._nova = None
         self.base = getattr(self.configuration,
                             'glusterfs_mount_point_base',
                             CONF.glusterfs_mount_point_base)
@@ -84,16 +83,9 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
             execute,
             glusterfs_mount_point_base=self.base)
 
-    def set_execute(self, execute):
-        super(GlusterfsDriver, self).set_execute(execute)
-        if self._remotefsclient:
-            self._remotefsclient.set_execute(execute)
-
     def do_setup(self, context):
         """Any initialization the volume driver does while starting."""
         super(GlusterfsDriver, self).do_setup(context)
-
-        self._nova = compute.API()
 
         config = self.configuration.glusterfs_shares_config
         if not config:
@@ -128,31 +120,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
             except Exception as exc:
                 LOG.warning(_('Exception during unmounting %s') % (exc))
 
-    def _do_umount(self, ignore_not_mounted, share):
-        mount_path = self._get_mount_point_for_share(share)
-        command = ['umount', mount_path]
-        try:
-            self._execute(*command, run_as_root=True)
-        except processutils.ProcessExecutionError as exc:
-            if ignore_not_mounted and 'not mounted' in exc.stderr:
-                LOG.info(_("%s is already umounted"), share)
-            else:
-                LOG.error(_("Failed to umount %(share)s, reason=%(stderr)s"),
-                          {'share': share, 'stderr': exc.stderr})
-                raise
-
-    def _refresh_mounts(self):
-        try:
-            self._unmount_shares()
-        except processutils.ProcessExecutionError as exc:
-            if 'target is busy' in exc.stderr:
-                LOG.warn(_("Failed to refresh mounts, reason=%s") %
-                         exc.stderr)
-            else:
-                raise
-
-        self._ensure_shares_mounted()
-
     def check_for_setup_error(self):
         """Just to override parent behavior."""
         pass
@@ -162,20 +129,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
         path = '%s/%s' % (self.configuration.glusterfs_mount_point_base,
                           hashed)
         return path
-
-    def get_active_image_from_info(self, volume):
-        """Returns filename of the active image from the info file."""
-
-        info_file = self._local_path_volume_info(volume)
-
-        snap_info = self._read_info_file(info_file, empty_if_missing=True)
-
-        if snap_info == {}:
-            # No info file = no snapshots exist
-            vol_path = os.path.basename(self._local_path_volume(volume))
-            return vol_path
-
-        return snap_info['active']
 
     @utils.synchronized('glusterfs', external=False)
     def create_cloned_volume(self, volume, src_vref):
@@ -293,27 +246,7 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
     @utils.synchronized('glusterfs', external=False)
     def delete_volume(self, volume):
         """Deletes a logical volume."""
-
-        if not volume['provider_location']:
-            LOG.warn(_('Volume %s does not have provider_location specified, '
-                     'skipping'), volume['name'])
-            return
-
-        self._ensure_share_mounted(volume['provider_location'])
-
-        volume_dir = self._local_volume_dir(volume)
-        mounted_path = os.path.join(volume_dir,
-                                    self.get_active_image_from_info(volume))
-
-        self._execute('rm', '-f', mounted_path, run_as_root=True)
-
-        # If an exception (e.g. timeout) occurred during delete_snapshot, the
-        # base volume may linger around, so just delete it if it exists
-        base_volume_path = self._local_path_volume(volume)
-        fileutils.delete_if_exists(base_volume_path)
-
-        info_path = self._local_path_volume_info(volume)
-        fileutils.delete_if_exists(info_path)
+        super(GlusterFSDriver, self).delete_volume(volume)
 
     @utils.synchronized('glusterfs', external=False)
     def create_snapshot(self, snapshot):
@@ -321,540 +254,10 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
 
         return self._create_snapshot(snapshot)
 
-    def _create_snapshot(self, snapshot):
-        """Create a snapshot.
-
-        If volume is attached, call to Nova to create snapshot,
-        providing a qcow2 file.
-        Otherwise, create locally with qemu-img.
-
-        A file named volume-<uuid>.info is stored with the volume
-        data and is a JSON table which contains a mapping between
-        Cinder snapshot UUIDs and filenames, as these associations
-        will change as snapshots are deleted.
-
-
-        Basic snapshot operation:
-
-        1. Initial volume file:
-            volume-1234
-
-        2. Snapshot created:
-            volume-1234  <- volume-1234.aaaa
-
-            volume-1234.aaaa becomes the new "active" disk image.
-            If the volume is not attached, this filename will be used to
-            attach the volume to a VM at volume-attach time.
-            If the volume is attached, the VM will switch to this file as
-            part of the snapshot process.
-
-            Note that volume-1234.aaaa represents changes after snapshot
-            'aaaa' was created.  So the data for snapshot 'aaaa' is actually
-            in the backing file(s) of volume-1234.aaaa.
-
-            This file has a qcow2 header recording the fact that volume-1234 is
-            its backing file.  Delta changes since the snapshot was created are
-            stored in this file, and the backing file (volume-1234) does not
-            change.
-
-            info file: { 'active': 'volume-1234.aaaa',
-                         'aaaa':   'volume-1234.aaaa' }
-
-        3. Second snapshot created:
-            volume-1234 <- volume-1234.aaaa <- volume-1234.bbbb
-
-            volume-1234.bbbb now becomes the "active" disk image, recording
-            changes made to the volume.
-
-            info file: { 'active': 'volume-1234.bbbb',
-                         'aaaa':   'volume-1234.aaaa',
-                         'bbbb':   'volume-1234.bbbb' }
-
-        4. First snapshot deleted:
-            volume-1234 <- volume-1234.aaaa(* now with bbbb's data)
-
-            volume-1234.aaaa is removed (logically) from the snapshot chain.
-            The data from volume-1234.bbbb is merged into it.
-
-            (*) Since bbbb's data was committed into the aaaa file, we have
-                "removed" aaaa's snapshot point but the .aaaa file now
-                represents snapshot with id "bbbb".
-
-
-            info file: { 'active': 'volume-1234.bbbb',
-                         'bbbb':   'volume-1234.aaaa'   (* changed!)
-                       }
-
-        5. Second snapshot deleted:
-            volume-1234
-
-            volume-1234.bbbb is removed from the snapshot chain, as above.
-            The base image, volume-1234, becomes the active image for this
-            volume again.  If in-use, the VM begins using the volume-1234.bbbb
-            file immediately as part of the snapshot delete process.
-
-            info file: { 'active': 'volume-1234' }
-
-        For the above operations, Cinder handles manipulation of qcow2 files
-        when the volume is detached.  When attached, Cinder creates and deletes
-        qcow2 files, but Nova is responsible for transitioning the VM between
-        them and handling live transfers of data between files as required.
-        """
-
-        status = snapshot['volume']['status']
-        if status not in ['available', 'in-use']:
-            msg = _('Volume status must be "available" or "in-use"'
-                    ' for snapshot. (is %s)') % status
-            raise exception.InvalidVolume(msg)
-
-        if status == 'in-use':
-            # Perform online snapshot via Nova
-            context = snapshot['context']
-
-            backing_filename = self.get_active_image_from_info(
-                snapshot['volume'])
-            path_to_disk = self._local_path_volume(snapshot['volume'])
-            new_snap_path = '%s.%s' % (
-                self._local_path_volume(snapshot['volume']),
-                snapshot['id'])
-
-            self._create_qcow2_snap_file(snapshot,
-                                         backing_filename,
-                                         new_snap_path)
-
-            connection_info = {
-                'type': 'qcow2',
-                'new_file': os.path.basename(new_snap_path),
-                'snapshot_id': snapshot['id']
-            }
-
-            try:
-                result = self._nova.create_volume_snapshot(
-                    context,
-                    snapshot['volume_id'],
-                    connection_info)
-                LOG.debug('nova call result: %s' % result)
-            except Exception as e:
-                LOG.error(_('Call to Nova to create snapshot failed'))
-                LOG.exception(e)
-                raise e
-
-            # Loop and wait for result
-            # Nova will call Cinderclient to update the status in the database
-            # An update of progress = '90%' means that Nova is done
-            seconds_elapsed = 0
-            increment = 1
-            timeout = 600
-            while True:
-                s = db.snapshot_get(context, snapshot['id'])
-
-                if s['status'] == 'creating':
-                    if s['progress'] == '90%':
-                        # Nova tasks completed successfully
-                        break
-
-                    time.sleep(increment)
-                    seconds_elapsed += increment
-                elif s['status'] == 'error':
-
-                    msg = _('Nova returned "error" status '
-                            'while creating snapshot.')
-                    raise exception.GlusterfsException(msg)
-
-                LOG.debug('Status of snapshot %(id)s is now %(status)s' % {
-                    'id': snapshot['id'],
-                    'status': s['status']
-                })
-
-                if 10 < seconds_elapsed <= 20:
-                    increment = 2
-                elif 20 < seconds_elapsed <= 60:
-                    increment = 5
-                elif 60 < seconds_elapsed:
-                    increment = 10
-
-                if seconds_elapsed > timeout:
-                    msg = _('Timed out while waiting for Nova update '
-                            'for creation of snapshot %s.') % snapshot['id']
-                    raise exception.GlusterfsException(msg)
-
-            info_path = self._local_path_volume(snapshot['volume']) + '.info'
-            snap_info = self._read_info_file(info_path, empty_if_missing=True)
-            snap_info['active'] = os.path.basename(new_snap_path)
-            snap_info[snapshot['id']] = os.path.basename(new_snap_path)
-            self._write_info_file(info_path, snap_info)
-
-            return
-
-        LOG.debug('create snapshot: %s' % snapshot)
-        LOG.debug('volume id: %s' % snapshot['volume_id'])
-
-        path_to_disk = self._local_path_volume(snapshot['volume'])
-        self._create_snapshot_offline(snapshot, path_to_disk)
-
-    def _create_qcow2_snap_file(self, snapshot, backing_filename,
-                                new_snap_path):
-        """Create a QCOW2 file backed by another file.
-
-        :param snapshot: snapshot reference
-        :param backing_filename: filename of file that will back the
-            new qcow2 file
-        :param new_snap_path: filename of new qcow2 file
-        """
-
-        backing_path_full_path = '%s/%s' % (
-            self._local_volume_dir(snapshot['volume']),
-            backing_filename)
-
-        command = ['qemu-img', 'create', '-f', 'qcow2', '-o',
-                   'backing_file=%s' % backing_path_full_path, new_snap_path]
-        self._execute(*command, run_as_root=True)
-
-        info = self._qemu_img_info(backing_path_full_path)
-        backing_fmt = info.file_format
-
-        command = ['qemu-img', 'rebase', '-u',
-                   '-b', backing_filename,
-                   '-F', backing_fmt,
-                   new_snap_path]
-        self._execute(*command, run_as_root=True)
-
-        self._set_rw_permissions_for_all(new_snap_path)
-
-    def _create_snapshot_offline(self, snapshot, path_to_disk):
-        """Create snapshot (offline case)."""
-
-        # Requires volume status = 'available'
-
-        new_snap_path = '%s.%s' % (path_to_disk, snapshot['id'])
-
-        backing_filename = self.get_active_image_from_info(snapshot['volume'])
-
-        self._create_qcow2_snap_file(snapshot,
-                                     backing_filename,
-                                     new_snap_path)
-
-        # Update info file
-
-        info_path = self._local_path_volume_info(snapshot['volume'])
-        snap_info = self._read_info_file(info_path,
-                                         empty_if_missing=True)
-
-        snap_info['active'] = os.path.basename(new_snap_path)
-        snap_info[snapshot['id']] = os.path.basename(new_snap_path)
-        self._write_info_file(info_path, snap_info)
-
-    def _get_matching_backing_file(self, backing_chain, snapshot_file):
-        return next(f for f in backing_chain
-                    if f.get('backing-filename', '') == snapshot_file)
-
     @utils.synchronized('glusterfs', external=False)
     def delete_snapshot(self, snapshot):
         """Apply locking to the delete snapshot operation."""
         self._delete_snapshot(snapshot)
-
-    def _delete_snapshot(self, snapshot):
-        """Delete a snapshot.
-
-        If volume status is 'available', delete snapshot here in Cinder
-        using qemu-img.
-
-        If volume status is 'in-use', calculate what qcow2 files need to
-        merge, and call to Nova to perform this operation.
-
-        :raises: InvalidVolume if status not acceptable
-        :raises: GlusterfsException(msg) if operation fails
-        :returns: None
-
-        """
-
-        LOG.debug('deleting snapshot %s' % snapshot['id'])
-
-        volume_status = snapshot['volume']['status']
-        if volume_status not in ['available', 'in-use']:
-            msg = _('Volume status must be "available" or "in-use".')
-            raise exception.InvalidVolume(msg)
-
-        self._ensure_share_writable(
-            self._local_volume_dir(snapshot['volume']))
-
-        # Determine the true snapshot file for this snapshot
-        #  based on the .info file
-        info_path = self._local_path_volume(snapshot['volume']) + '.info'
-        snap_info = self._read_info_file(info_path, empty_if_missing=True)
-
-        if snapshot['id'] not in snap_info:
-            # If snapshot info file is present, but snapshot record does not
-            # exist, do not attempt to delete.
-            # (This happens, for example, if snapshot_create failed due to lack
-            # of permission to write to the share.)
-            LOG.info(_('Snapshot record for %s is not present, allowing '
-                       'snapshot_delete to proceed.') % snapshot['id'])
-            return
-
-        snapshot_file = snap_info[snapshot['id']]
-        LOG.debug('snapshot_file for this snap is %s' % snapshot_file)
-
-        snapshot_path = '%s/%s' % (self._local_volume_dir(snapshot['volume']),
-                                   snapshot_file)
-
-        snapshot_path_img_info = self._qemu_img_info(snapshot_path)
-
-        vol_path = self._local_volume_dir(snapshot['volume'])
-
-        # Find what file has this as its backing file
-        active_file = self.get_active_image_from_info(snapshot['volume'])
-        active_file_path = '%s/%s' % (vol_path, active_file)
-
-        if volume_status == 'in-use':
-            # Online delete
-            context = snapshot['context']
-
-            base_file = snapshot_path_img_info.backing_file
-            if base_file is None:
-                # There should always be at least the original volume
-                # file as base.
-                msg = _('No backing file found for %s, allowing snapshot '
-                        'to be deleted.') % snapshot_path
-                LOG.warn(msg)
-
-                # Snapshot may be stale, so just delete it and update the
-                # info file instead of blocking
-                return self._delete_stale_snapshot(snapshot)
-
-            base_path = os.path.join(
-                self._local_volume_dir(snapshot['volume']), base_file)
-            base_file_img_info = self._qemu_img_info(base_path)
-            new_base_file = base_file_img_info.backing_file
-
-            base_id = None
-            info_path = self._local_path_volume(snapshot['volume']) + '.info'
-            snap_info = self._read_info_file(info_path)
-            for key, value in snap_info.iteritems():
-                if value == base_file and key != 'active':
-                    base_id = key
-                    break
-            if base_id is None:
-                # This means we are deleting the oldest snapshot
-                msg = 'No %(base_id)s found for %(file)s' % {
-                    'base_id': 'base_id',
-                    'file': snapshot_file}
-                LOG.debug(msg)
-
-            online_delete_info = {
-                'active_file': active_file,
-                'snapshot_file': snapshot_file,
-                'base_file': base_file,
-                'base_id': base_id,
-                'new_base_file': new_base_file
-            }
-
-            return self._delete_snapshot_online(context,
-                                                snapshot,
-                                                online_delete_info)
-
-        if snapshot_file == active_file:
-            # Need to merge snapshot_file into its backing file
-            # There is no top file
-            #      T0       |        T1         |
-            #     base      |   snapshot_file   | None
-            # (guaranteed to|  (being deleted)  |
-            #    exist)     |                   |
-
-            base_file = snapshot_path_img_info.backing_file
-
-            self._qemu_img_commit(snapshot_path)
-            self._execute('rm', '-f', snapshot_path, run_as_root=True)
-
-            # Remove snapshot_file from info
-            info_path = self._local_path_volume(snapshot['volume']) + '.info'
-            snap_info = self._read_info_file(info_path)
-
-            del(snap_info[snapshot['id']])
-            # Active file has changed
-            snap_info['active'] = base_file
-            self._write_info_file(info_path, snap_info)
-        else:
-            #    T0         |      T1        |     T2         |       T3
-            #    base       |  snapshot_file |  higher_file   |  highest_file
-            #(guaranteed to | (being deleted)|(guaranteed to  |  (may exist,
-            #  exist, not   |                | exist, being   |needs ptr update
-            #  used here)   |                | committed down)|     if so)
-
-            backing_chain = self._get_backing_chain_for_path(
-                snapshot['volume'], active_file_path)
-            # This file is guaranteed to exist since we aren't operating on
-            # the active file.
-            higher_file = next((os.path.basename(f['filename'])
-                                for f in backing_chain
-                                if f.get('backing-filename', '') ==
-                                snapshot_file),
-                               None)
-            if higher_file is None:
-                msg = _('No file found with %s as backing file.') %\
-                    snapshot_file
-                raise exception.GlusterfsException(msg)
-
-            snap_info = self._read_info_file(info_path)
-            higher_id = next((i for i in snap_info
-                              if snap_info[i] == higher_file
-                              and i != 'active'),
-                             None)
-            if higher_id is None:
-                msg = _('No snap found with %s as backing file.') %\
-                    higher_file
-                raise exception.GlusterfsException(msg)
-
-            # Is there a file depending on higher_file?
-            highest_file = next((os.path.basename(f['filename'])
-                                for f in backing_chain
-                                if f.get('backing-filename', '') ==
-                                higher_file),
-                                None)
-            if highest_file is None:
-                msg = 'No file depends on %s.' % higher_file
-                LOG.debug(msg)
-
-            # Committing higher_file into snapshot_file
-            # And update pointer in highest_file
-            higher_file_path = '%s/%s' % (vol_path, higher_file)
-            self._qemu_img_commit(higher_file_path)
-            if highest_file is not None:
-                highest_file_path = '%s/%s' % (vol_path, highest_file)
-                info = self._qemu_img_info(snapshot_path)
-                snapshot_file_fmt = info.file_format
-
-                backing_fmt = ('-F', snapshot_file_fmt)
-                self._execute('qemu-img', 'rebase', '-u',
-                              '-b', snapshot_file,
-                              highest_file_path, *backing_fmt,
-                              run_as_root=True)
-            self._execute('rm', '-f', higher_file_path, run_as_root=True)
-
-            # Remove snapshot_file from info
-            info_path = self._local_path_volume(snapshot['volume']) + '.info'
-            snap_info = self._read_info_file(info_path)
-            del(snap_info[snapshot['id']])
-            snap_info[higher_id] = snapshot_file
-            if higher_file == active_file:
-                if highest_file is not None:
-                    msg = _('Check condition failed: '
-                            '%s expected to be None.') % 'highest_file'
-                    raise exception.GlusterfsException(msg)
-                # Active file has changed
-                snap_info['active'] = snapshot_file
-            self._write_info_file(info_path, snap_info)
-
-    def _delete_snapshot_online(self, context, snapshot, info):
-        # Update info over the course of this method
-        # active file never changes
-        info_path = self._local_path_volume(snapshot['volume']) + '.info'
-        snap_info = self._read_info_file(info_path)
-
-        if info['active_file'] == info['snapshot_file']:
-            # blockRebase/Pull base into active
-            # info['base'] => snapshot_file
-
-            file_to_delete = info['base_file']
-            if info['base_id'] is None:
-                # Passing base=none to blockRebase ensures that
-                # libvirt blanks out the qcow2 backing file pointer
-                new_base = None
-            else:
-                new_base = info['new_base_file']
-                snap_info[info['base_id']] = info['snapshot_file']
-
-            delete_info = {'file_to_merge': new_base,
-                           'merge_target_file': None,  # current
-                           'type': 'qcow2',
-                           'volume_id': snapshot['volume']['id']}
-
-            del(snap_info[snapshot['id']])
-        else:
-            # blockCommit snapshot into base
-            # info['base'] <= snapshot_file
-            # delete record of snapshot
-            file_to_delete = info['snapshot_file']
-
-            delete_info = {'file_to_merge': info['snapshot_file'],
-                           'merge_target_file': info['base_file'],
-                           'type': 'qcow2',
-                           'volume_id': snapshot['volume']['id']}
-
-            del(snap_info[snapshot['id']])
-
-        try:
-            self._nova.delete_volume_snapshot(
-                context,
-                snapshot['id'],
-                delete_info)
-        except Exception as e:
-            LOG.error(_('Call to Nova delete snapshot failed'))
-            LOG.exception(e)
-            raise e
-
-        # Loop and wait for result
-        # Nova will call Cinderclient to update the status in the database
-        # An update of progress = '90%' means that Nova is done
-        seconds_elapsed = 0
-        increment = 1
-        timeout = 7200
-        while True:
-            s = db.snapshot_get(context, snapshot['id'])
-
-            if s['status'] == 'deleting':
-                if s['progress'] == '90%':
-                    # Nova tasks completed successfully
-                    break
-                else:
-                    msg = ('status of snapshot %s is '
-                           'still "deleting"... waiting') % snapshot['id']
-                    LOG.debug(msg)
-                    time.sleep(increment)
-                    seconds_elapsed += increment
-            else:
-                msg = _('Unable to delete snapshot %(id)s, '
-                        'status: %(status)s.') % {'id': snapshot['id'],
-                                                  'status': s['status']}
-                raise exception.GlusterfsException(msg)
-
-            if 10 < seconds_elapsed <= 20:
-                increment = 2
-            elif 20 < seconds_elapsed <= 60:
-                increment = 5
-            elif 60 < seconds_elapsed:
-                increment = 10
-
-            if seconds_elapsed > timeout:
-                msg = _('Timed out while waiting for Nova update '
-                        'for deletion of snapshot %(id)s.') %\
-                    {'id': snapshot['id']}
-                raise exception.GlusterfsException(msg)
-
-        # Write info file updated above
-        self._write_info_file(info_path, snap_info)
-
-        # Delete stale file
-        path_to_delete = os.path.join(
-            self._local_volume_dir(snapshot['volume']), file_to_delete)
-        self._execute('rm', '-f', path_to_delete, run_as_root=True)
-
-    def _delete_stale_snapshot(self, snapshot):
-        info_path = self._local_path_volume(snapshot['volume']) + '.info'
-        snap_info = self._read_info_file(info_path)
-
-        if snapshot['id'] in snap_info:
-            snapshot_file = snap_info[snapshot['id']]
-            active_file = self.get_active_image_from_info(snapshot['volume'])
-            snapshot_path = os.path.join(
-                self._local_volume_dir(snapshot['volume']), snapshot_file)
-            if (snapshot_file == active_file):
-                return
-
-            LOG.info(_('Deleting stale snapshot: %s') % snapshot['id'])
-            fileutils.delete_if_exists(snapshot_path)
-            del(snap_info[snapshot['id']])
-            self._write_info_file(info_path, snap_info)
 
     def ensure_export(self, ctx, volume):
         """Synchronously recreates an export for a logical volume."""
@@ -867,7 +270,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
 
     def remove_export(self, ctx, volume):
         """Removes an export for a logical volume."""
-
         pass
 
     def validate_connector(self, connector):
@@ -900,10 +302,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
             'data': data,
             'mount_point_base': self._get_mount_point_base()
         }
-
-    def terminate_connection(self, volume, connector, **kwargs):
-        """Disallow connection from connector."""
-        pass
 
     @utils.synchronized('glusterfs', external=False)
     def copy_volume_to_image(self, context, volume, image_service, image_meta):
@@ -950,25 +348,7 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
 
     @utils.synchronized('glusterfs', external=False)
     def extend_volume(self, volume, size_gb):
-        volume_path = self.local_path(volume)
-        volume_filename = os.path.basename(volume_path)
-
-        # Ensure no snapshots exist for the volume
-        active_image = self.get_active_image_from_info(volume)
-        if volume_filename != active_image:
-            msg = _('Extend volume is only supported for this'
-                    ' driver when no snapshots exist.')
-            raise exception.InvalidVolume(msg)
-
-        info = self._qemu_img_info(volume_path)
-        backing_fmt = info.file_format
-
-        if backing_fmt not in ['raw', 'qcow2']:
-            msg = _('Unrecognized backing format: %s')
-            raise exception.InvalidVolume(msg % backing_fmt)
-
-        # qemu-img can resize both raw and qcow2 files
-        image_utils.resize_image(volume_path, size_gb)
+        super(GlusterFSDriver, self)._extend_volume(volume, size_gb)
 
     def _do_create_volume(self, volume):
         """Create a volume on given glusterfs_share.
