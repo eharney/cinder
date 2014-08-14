@@ -673,6 +673,8 @@ class Invalid3PARDomain(VolumeDriverException):
 class RemoteFSException(VolumeDriverException):
     message = _("Unknown RemoteFS exception")
 
+class RemoteFSSnapException(RemoteFSException):
+    message = ("FS driver snapshot exception")
 
 class RemoteFSNoSharesMounted(RemoteFSException):
     message = _("No mounted shares found")
