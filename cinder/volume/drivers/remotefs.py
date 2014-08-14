@@ -14,10 +14,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import abc
 import hashlib
 import json
 import os
 import re
+import six
 import tempfile
 
 from oslo.config import cfg
@@ -55,6 +57,7 @@ CONF = cfg.CONF
 CONF.register_opts(nas_opts)
 
 
+@six.add_metaclass(abc.ABCMeta)
 class RemoteFSDriver(driver.VolumeDriver):
     """Common base for drivers that work like NFS."""
 
@@ -365,6 +368,7 @@ class RemoteFSDriver(driver.VolumeDriver):
         raise NotImplementedError()
 
 
+@six.add_metaclass(abc.ABCMeta)
 class RemoteFSSnapDriver(RemoteFSDriver):
     """Base class for remotefs drivers implementing qcow2 snapshots.
 
@@ -526,3 +530,11 @@ class RemoteFSSnapDriver(RemoteFSDriver):
                     'Cinder volume service. Snapshot operations will not be '
                     'supported.') % {'dir': path}
             raise exception.RemoteFSException(msg)
+
+    @abc.abstractmethod
+    def create_snapshot(self):
+        pass
+
+    @abc.abstractmethod
+    def delete_snapshot(self, snapshot):
+        pass
