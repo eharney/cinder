@@ -64,7 +64,7 @@ CONF = cfg.CONF
 CONF.register_opts(volume_opts)
 
 
-class NfsDriver(remotefs.RemoteFSDriver):
+class NfsDriver(remotefs.RemoteFSSnapDriver):
     """NFS based cinder driver. Creates file on NFS share for using it
     as block device on hypervisor.
     """
