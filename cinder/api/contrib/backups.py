@@ -29,6 +29,7 @@ from cinder import exception
 from cinder.i18n import _
 from cinder.openstack.common import log as logging
 from cinder import utils
+from cinder import xml_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ class BackupExportImportTemplate(xmlutil.TemplateBuilder):
 
 class CreateDeserializer(wsgi.MetadataXMLDeserializer):
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         backup = self._extract_backup(dom)
         return {'body': {'backup': backup}}
 
@@ -116,7 +117,7 @@ class CreateDeserializer(wsgi.MetadataXMLDeserializer):
 
 class RestoreDeserializer(wsgi.MetadataXMLDeserializer):
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         restore = self._extract_restore(dom)
         return {'body': {'restore': restore}}
 
@@ -130,7 +131,7 @@ class RestoreDeserializer(wsgi.MetadataXMLDeserializer):
 
 class BackupImportDeserializer(wsgi.MetadataXMLDeserializer):
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         backup = self._extract_backup(dom)
         retval = {'body': {'backup-record': backup}}
         return retval

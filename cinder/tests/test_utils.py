@@ -34,6 +34,7 @@ from cinder.openstack.common import timeutils
 from cinder import ssh_utils
 from cinder import test
 from cinder import utils
+from cinder import xml_utils
 
 
 CONF = cfg.CONF
@@ -130,7 +131,7 @@ grep foo
 
 class GetFromPathTestCase(test.TestCase):
     def test_tolerates_nones(self):
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         input = []
         self.assertEqual([], f(input, "a"))
@@ -168,7 +169,7 @@ class GetFromPathTestCase(test.TestCase):
         self.assertEqual([], f(input, "a/b/c"))
 
     def test_does_select(self):
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         input = [{'a': 'a_1'}]
         self.assertEqual(['a_1'], f(input, "a"))
@@ -208,7 +209,7 @@ class GetFromPathTestCase(test.TestCase):
         self.assertEqual([], f(input, "i/r/t"))
 
     def test_flattens_lists(self):
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         input = [{'a': [1, 2, 3]}]
         self.assertEqual([1, 2, 3], f(input, "a"))
@@ -233,7 +234,7 @@ class GetFromPathTestCase(test.TestCase):
         self.assertEqual(['b_1'], f(input, "a/b"))
 
     def test_bad_xpath(self):
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         self.assertRaises(exception.Error, f, [], None)
         self.assertRaises(exception.Error, f, [], "")
@@ -250,7 +251,7 @@ class GetFromPathTestCase(test.TestCase):
         # Real world failure case...
         #  We weren't coping when the input was a Dictionary instead of a List
         # This led to test_accepts_dictionaries
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         inst = {'fixed_ip': {'floating_ips': [{'address': '1.2.3.4'}],
                              'address': '192.168.0.3'},
@@ -262,7 +263,7 @@ class GetFromPathTestCase(test.TestCase):
         self.assertEqual(['1.2.3.4'], public_ips)
 
     def test_accepts_dictionaries(self):
-        f = utils.get_from_path
+        f = xml_utils.get_from_path
 
         input = {'a': [1, 2, 3]}
         self.assertEqual([1, 2, 3], f(input, "a"))
@@ -438,18 +439,18 @@ class GenericUtilsTestCase(test.TestCase):
                 'd': '&c;' * 9999,
             }).strip()
 
-        dom = utils.safe_minidom_parse_string(normal_body)
+        dom = xml_utils.safe_minidom_parse_string(normal_body)
         # Some versions of minidom inject extra newlines so we ignore them
         result = str(dom.toxml()).replace('\n', '')
         self.assertEqual(normal_body, result)
 
         self.assertRaises(ValueError,
-                          utils.safe_minidom_parse_string,
+                          xml_utils.safe_minidom_parse_string,
                           killer_body())
 
     def test_xhtml_escape(self):
-        self.assertEqual('&quot;foo&quot;', utils.xhtml_escape('"foo"'))
-        self.assertEqual('&apos;foo&apos;', utils.xhtml_escape("'foo'"))
+        self.assertEqual('&quot;foo&quot;', xml_utils.xhtml_escape('"foo"'))
+        self.assertEqual('&apos;foo&apos;', xml_utils.xhtml_escape("'foo'"))
 
     def test_hash_file(self):
         data = 'Mary had a little lamb, its fleece as white as snow'

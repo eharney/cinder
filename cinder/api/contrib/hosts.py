@@ -30,6 +30,7 @@ from cinder.openstack.common import log as logging
 from cinder.openstack.common import timeutils
 from cinder import utils
 from cinder.volume import api as volume_api
+from cinder import xml_utils
 
 
 CONF = cfg.CONF
@@ -82,7 +83,7 @@ class HostShowTemplate(xmlutil.TemplateBuilder):
 class HostDeserializer(wsgi.XMLDeserializer):
     def default(self, string):
         try:
-            node = utils.safe_minidom_parse_string(string)
+            node = xml_utils.safe_minidom_parse_string(string)
         except expat.ExpatError:
             msg = _("cannot understand XML")
             raise exception.MalformedRequestBody(reason=msg)

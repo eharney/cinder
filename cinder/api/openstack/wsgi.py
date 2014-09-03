@@ -29,8 +29,8 @@ from cinder import i18n
 from cinder.i18n import _
 from cinder.openstack.common import jsonutils
 from cinder.openstack.common import log as logging
-from cinder import utils
 from cinder import wsgi
+from cinder import xml_utils
 
 
 XMLNS_V1 = 'http://docs.openstack.org/volume/api/v1'
@@ -232,7 +232,8 @@ class XMLDeserializer(TextDeserializer):
         plurals = set(self.metadata.get('plurals', {}))
 
         try:
-            node = utils.safe_minidom_parse_string(datastring).childNodes[0]
+            node = \
+                xml_utils.safe_minidom_parse_string(datastring).childNodes[0]
             return {node.nodeName: self._from_xml_node(node, plurals)}
         except expat.ExpatError:
             msg = _("cannot understand XML")
@@ -641,7 +642,7 @@ def action_peek_json(body):
 def action_peek_xml(body):
     """Determine action to invoke."""
 
-    dom = utils.safe_minidom_parse_string(body)
+    dom = xml_utils.safe_minidom_parse_string(body)
     action_node = dom.childNodes[0]
 
     return action_node.tagName

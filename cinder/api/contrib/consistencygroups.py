@@ -28,7 +28,7 @@ from cinder import consistencygroup as consistencygroupAPI
 from cinder import exception
 from cinder.i18n import _
 from cinder.openstack.common import log as logging
-from cinder import utils
+from cinder import xml_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class ConsistencyGroupsTemplate(xmlutil.TemplateBuilder):
 
 class CreateDeserializer(wsgi.MetadataXMLDeserializer):
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         consistencygroup = self._extract_consistencygroup(dom)
         return {'body': {'consistencygroup': consistencygroup}}
 

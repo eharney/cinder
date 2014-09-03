@@ -31,6 +31,7 @@ from cinder import utils
 from cinder import volume as cinder_volume
 from cinder.volume import utils as volume_utils
 from cinder.volume import volume_types
+from cinder import xml_utils
 
 
 LOG = logging.getLogger(__name__)
@@ -212,7 +213,7 @@ class CreateDeserializer(CommonDeserializer):
 
     def default(self, string):
         """Deserialize an xml-formatted volume create request."""
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         volume = self._extract_volume(dom)
         return {'body': {'volume': volume}}
 

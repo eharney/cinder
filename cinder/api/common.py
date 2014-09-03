@@ -25,7 +25,7 @@ from cinder.api.openstack import wsgi
 from cinder.api import xmlutil
 from cinder.i18n import _
 from cinder.openstack.common import log as logging
-from cinder import utils
+from cinder import xml_utils
 
 
 api_common_opts = [
@@ -294,7 +294,7 @@ class ViewBuilder(object):
 
 class MetadataDeserializer(wsgi.MetadataXMLDeserializer):
     def deserialize(self, text):
-        dom = utils.safe_minidom_parse_string(text)
+        dom = xml_utils.safe_minidom_parse_string(text)
         metadata_node = self.find_first_child_named(dom, "metadata")
         metadata = self.extract_metadata(metadata_node)
         return {'body': {'metadata': metadata}}
@@ -302,7 +302,7 @@ class MetadataDeserializer(wsgi.MetadataXMLDeserializer):
 
 class MetaItemDeserializer(wsgi.MetadataXMLDeserializer):
     def deserialize(self, text):
-        dom = utils.safe_minidom_parse_string(text)
+        dom = xml_utils.safe_minidom_parse_string(text)
         metadata_item = self.extract_metadata(dom)
         return {'body': {'meta': metadata_item}}
 
@@ -320,7 +320,7 @@ class MetadataXMLDeserializer(wsgi.XMLDeserializer):
         return metadata
 
     def _extract_metadata_container(self, datastring):
-        dom = utils.safe_minidom_parse_string(datastring)
+        dom = xml_utils.safe_minidom_parse_string(datastring)
         metadata_node = self.find_first_child_named(dom, "metadata")
         metadata = self.extract_metadata(metadata_node)
         return {'body': {'metadata': metadata}}
@@ -332,7 +332,7 @@ class MetadataXMLDeserializer(wsgi.XMLDeserializer):
         return self._extract_metadata_container(datastring)
 
     def update(self, datastring):
-        dom = utils.safe_minidom_parse_string(datastring)
+        dom = xml_utils.safe_minidom_parse_string(datastring)
         metadata_item = self.extract_metadata(dom)
         return {'body': {'meta': metadata_item}}
 

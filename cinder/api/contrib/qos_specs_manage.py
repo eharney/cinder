@@ -27,8 +27,8 @@ from cinder.i18n import _
 from cinder.openstack.common import log as logging
 from cinder.openstack.common import strutils
 from cinder import rpc
-from cinder import utils
 from cinder.volume import qos_specs
+from cinder import xml_utils
 
 
 LOG = logging.getLogger(__name__)
@@ -73,7 +73,7 @@ class QoSSpecsKeyDeserializer(wsgi.XMLDeserializer):
         return keys
 
     def default(self, string):
-        dom = utils.safe_minidom_parse_string(string)
+        dom = xml_utils.safe_minidom_parse_string(string)
         key_node = self.find_first_child_named(dom, 'keys')
         if not key_node:
             LOG.info(_("Unable to parse XML input."))

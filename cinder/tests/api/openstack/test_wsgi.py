@@ -263,7 +263,7 @@ class MetadataXMLDeserializerTest(test.TestCase):
                          'key2': 'value2',
                          'key3': 'value&3'}
         meta_deserializer = wsgi.MetadataXMLDeserializer()
-        document = wsgi.utils.safe_minidom_parse_string(meta_xml_str)
+        document = wsgi.xml_utils.safe_minidom_parse_string(meta_xml_str)
         root_node = document.childNodes[0]
         meta_extracted = meta_deserializer.extract_metadata(root_node)
         self.assertEqual(meta_expected, meta_extracted)
