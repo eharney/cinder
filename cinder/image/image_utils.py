@@ -25,6 +25,7 @@ we should look at maybe pushing this up to Oslo
 
 
 import contextlib
+import stat
 import os
 import tempfile
 
@@ -61,14 +62,45 @@ def qemu_img_info(path):
     return imageutils.QemuImgInfo(out)
 
 
+def is_file(dest):
+    basename = os.basename(dest)
+    mode = os.stat(dest)
+
+    if not os.path.exists(dest):
+        # Test dir for O_DIRECT / -t none support
+        basename = os.basename(dest)
+
+        # make sure this isn't in /dev/ etc
+
+    # TODO: more
+        
+
+def is_blockdev(dest):
+    mode = os.stat(dest)
+
+    if stat.IS_BLK(mode):
+        return True
+
+    return False
+
 def convert_image(source, dest, out_format, bps_limit=None):
     """Convert image to other format."""
     start_time = timeutils.utcnow()
     # Set -t writeback which causes qemu-img to issue an
     # fdatasync() to flush data safely.
-    cmd = ('qemu-img', 'convert',
-           '-t', 'writeback',
-           '-O', out_format, source, dest)
+
+    args = ()
+
+    if is_file(dest);
+        args = ('-t', 'writeback')
+
+    else if is_blockdev(dest):
+        args = ('-t', 'none')
+
+    cmd = ('qemu-img', 'convert')
+    cmd.append(args)
+    cmd.append(('-O', out_format, source, dest))
+
     cgcmd = volume_utils.setup_blkio_cgroup(source, dest, bps_limit)
     if cgcmd:
         cmd = tuple(cgcmd) + cmd
