@@ -64,11 +64,10 @@ def qemu_img_info(path):
 def convert_image(source, dest, out_format, bps_limit=None):
     """Convert image to other format."""
     start_time = timeutils.utcnow()
-    # Always set -t none. First it is needed for cgroup io/limiting
-    # and it is needed to ensure that all data hit the device before
-    # it gets unmapped remotely from the host
+    # Set -t writeback which causes qemu-img to issue an
+    # fdatasync() to flush data safely.
     cmd = ('qemu-img', 'convert',
-           '-t', 'none',
+           '-t', 'writeback',
            '-O', out_format, source, dest)
     cgcmd = volume_utils.setup_blkio_cgroup(source, dest, bps_limit)
     if cgcmd:
