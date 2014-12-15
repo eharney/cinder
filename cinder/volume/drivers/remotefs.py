@@ -247,7 +247,12 @@ class RemoteFSDriver(driver.LocalVD, driver.TransferVD, driver.BaseVD):
         volume_size = volume['size']
 
         if getattr(self.configuration,
-                   self.driver_prefix + '_sparsed_volumes'):
+                   self.driver_prefix + '_qcow2_volumes', False):
+            # QCOW2 volumes are inherently sparse, so this setting
+            # will override the _sparsed_volumes setting.
+            self._create_qcow2_file(volume_path, volume_size)
+        elif getattr(self.configuration,
+                     self.driver_prefix + '_sparsed_volumes', False):
             self._create_sparsed_file(volume_path, volume_size)
         else:
             self._create_regular_file(volume_path, volume_size)
@@ -368,7 +373,7 @@ class RemoteFSDriver(driver.LocalVD, driver.TransferVD, driver.BaseVD):
                             '%(perm)s'), {'path': path, 'perm': permissions})
 
         self._execute('chmod', permissions, path,
-                      run_as_root=self._execute_as_root)
+                      run_as_root=True)
 
     def _set_rw_permissions_for_all(self, path):
         """Sets 666 permissions for the path."""
@@ -709,6 +714,10 @@ class RemoteFSSnapDriver(RemoteFSDriver, driver.SnapshotVD):
         raise NotImplementedError()
 
     def _img_commit(self, path):
+        # TODO(eharney): this is not using the correct permissions for
+        # NFS snapshots
+        #  It needs to run as root for volumes attached to instances, but
+        #  does not when in secure mode.
         self._execute('qemu-img', 'commit', path,
                       run_as_root=self._execute_as_root)
         self._delete(path)
@@ -1110,7 +1119,11 @@ class RemoteFSSnapDriver(RemoteFSDriver, driver.SnapshotVD):
 
         command = ['qemu-img', 'create', '-f', 'qcow2', '-o',
                    'backing_file=%s' % backing_path_full_path, new_snap_path]
-        self._execute(*command, run_as_root=self._execute_as_root)
+
+        # qemu-img create must run as root, because it reads from the
+        # backing file, which will be owned by qemu:qemu if attached to an
+        # instance.   (TODO(eharney): sanity check this)
+        self._execute(*command, run_as_root=True)
 
         info = self._qemu_img_info(backing_path_full_path,
                                    snapshot['volume']['name'])
@@ -1120,9 +1133,19 @@ class RemoteFSSnapDriver(RemoteFSDriver, driver.SnapshotVD):
                    '-b', backing_filename,
                    '-F', backing_fmt,
                    new_snap_path]
-        self._execute(*command, run_as_root=self._execute_as_root)
+
+        # qemu-img rebase must run as root for the same reasons as above
+        self._execute(*command, run_as_root=True)
 
         self._set_rw_permissions(new_snap_path)
+
+        # if in secure mode, chown new file
+        if self.secure_file_operations_enabled():
+            ref_file = backing_path_full_path
+            command = ['chown',
+                       '--reference=%s' % ref_file,
+                       new_snap_path]
+            self._execute(*command, run_as_root=True)
 
     def _create_snapshot(self, snapshot):
         """Create a snapshot.

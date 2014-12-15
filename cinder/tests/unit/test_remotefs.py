@@ -36,7 +36,7 @@ class RemoteFsSnapDriverTestCase(test.TestCase):
     _FAKE_MNT_POINT = '/mnt/fake_hash'
     _FAKE_VOLUME_PATH = os.path.join(_FAKE_MNT_POINT,
                                      _FAKE_VOLUME_NAME)
-    _FAKE_SNAPSHOT_ID = '5g811859-4928-4cb7-801a-a50c37ceacba'
+    _FAKE_SNAPSHOT_ID = '5f811859-4928-4cb7-801a-a50c37ceacba'
     _FAKE_SNAPSHOT = {'context': _FAKE_CONTEXT,
                       'id': _FAKE_SNAPSHOT_ID,
                       'volume': _FAKE_VOLUME,
@@ -193,7 +193,10 @@ class RemoteFsSnapDriverTestCase(test.TestCase):
         self._driver._write_info_file.assert_called_once_with(
             mock.sentinel.fake_info_path, expected_info)
 
-    def test_do_create_snapshot(self):
+    @mock.patch.object(remotefs.RemoteFSDriver,
+                       'secure_file_operations_enabled',
+                       return_value=True)
+    def test_do_create_snapshot(self, _mock_sec_enabled):
         self._driver._local_volume_dir = mock.Mock(
             return_value=self._FAKE_VOLUME_PATH)
         fake_backing_path = os.path.join(

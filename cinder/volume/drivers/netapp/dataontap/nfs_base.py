@@ -54,7 +54,6 @@ CONF = cfg.CONF
 @six.add_metaclass(utils.TraceWrapperWithABCMetaclass)
 class NetAppNfsDriver(driver.ManageableVD,
                       driver.CloneableImageVD,
-                      driver.SnapshotVD,
                       nfs.NfsDriver):
     """Base class for NetApp NFS driver for Data ONTAP."""
 

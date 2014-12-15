@@ -19,6 +19,7 @@ import errno
 import os
 
 import mock
+from oslo_utils import imageutils
 from oslo_utils import units
 
 from cinder import exception
@@ -321,6 +322,7 @@ class NfsDriverTestCase(test.TestCase):
     TEST_SHARES_CONFIG_FILE = '/etc/cinder/test-shares.conf'
     TEST_NFS_EXPORT_SPACES = 'nfs-host3:/export this'
     TEST_MNT_POINT_SPACES = '/ 0 0 0 /foo'
+    VOLUME_UUID = '69ad4ff6-b892-4215-aaaa-aaaaaaaaaaaa'
 
     def setUp(self):
         super(NfsDriverTestCase, self).setUp()
@@ -580,11 +582,16 @@ class NfsDriverTestCase(test.TestCase):
             mock_get_capacity_info.assert_has_calls(calls)
             self.assertEqual(2, mock_get_capacity_info.call_count)
 
-    def _simple_volume(self):
+    def _simple_volume(self, uuid=None):
         volume = DumbVolume()
-        volume['provider_location'] = '127.0.0.1:/mnt'
-        volume['name'] = 'volume_name'
+        volume['provider_location'] = self.TEST_NFS_EXPORT1
+        if uuid is None:
+            volume['id'] = self.VOLUME_UUID
+        else:
+            volume['id'] = uuid
+        volume['name'] = 'volume-%s' % volume['id']
         volume['size'] = 10
+        volume['status'] = 'available'
 
         return volume
 
@@ -632,6 +639,7 @@ class NfsDriverTestCase(test.TestCase):
                 drv, '_ensure_share_mounted') as mock_ensure_share:
             drv._ensure_share_mounted()
             volume = DumbVolume()
+            volume['id'] = self.VOLUME_UUID
             volume['size'] = self.TEST_SIZE_IN_GB
             drv.create_volume(volume)
 
@@ -647,6 +655,7 @@ class NfsDriverTestCase(test.TestCase):
         with mock.patch.object(drv, '_find_share') as mock_find_share:
             mock_find_share.return_value = self.TEST_NFS_EXPORT1
             volume = DumbVolume()
+            volume['id'] = self.VOLUME_UUID
             volume['size'] = self.TEST_SIZE_IN_GB
             result = drv.create_volume(volume)
             self.assertEqual(self.TEST_NFS_EXPORT1,
@@ -657,15 +666,12 @@ class NfsDriverTestCase(test.TestCase):
         """delete_volume simple test case."""
         drv = self._driver
         drv._ensure_share_mounted = mock.Mock()
-
-        volume = DumbVolume()
-        volume['name'] = 'volume-123'
-        volume['provider_location'] = self.TEST_NFS_EXPORT1
+        volume = self._simple_volume()
 
         with mock.patch.object(drv, 'local_path') as mock_local_path:
             mock_local_path.return_value = self.TEST_LOCAL_PATH
             drv.delete_volume(volume)
-            mock_local_path.assert_called_once_with(volume)
+            mock_local_path.assert_called_with(volume)
             self._execute.assert_called_once_with('rm', '-f',
                                                   self.TEST_LOCAL_PATH,
                                                   run_as_root=True)
@@ -687,6 +693,7 @@ class NfsDriverTestCase(test.TestCase):
         drv = self._driver
         volume = DumbVolume()
         volume['name'] = 'volume-123'
+        volume['id'] = self.VOLUME_UUID
         volume['provider_location'] = None
 
         with mock.patch.object(drv, '_ensure_share_mounted'):
@@ -1020,6 +1027,192 @@ class NfsDriverTestCase(test.TestCase):
 
         self.assertEqual(min_num_attempts,
                          drv._remotefsclient.mount.call_count)
+
+    @mock.patch.object(image_utils, 'convert_image')
+    @mock.patch.object(image_utils, 'qemu_img_info')
+    def _copy_volume_from_snapshot(self, img_format, mock_img_info,
+                                   mock_convert_image):
+        drv = self._driver
+        dest_volume = self._simple_volume(
+            'c1073000-0000-0000-0000-0000000c1073')
+        src_volume = self._simple_volume()
+
+        vol_dir = os.path.join(self.TEST_MNT_POINT_BASE,
+                               drv._get_hash_str(self.TEST_NFS_EXPORT1))
+        src_vol_path = os.path.join(vol_dir, src_volume['name'])
+        dest_vol_path = os.path.join(vol_dir, dest_volume['name'])
+        info_path = os.path.join(vol_dir, src_volume['name']) + '.info'
+
+        snapshot = {'volume_name': src_volume['name'],
+                    'name': 'clone-snap-%s' % src_volume['id'],
+                    'size': src_volume['size'],
+                    'volume_size': src_volume['size'],
+                    'volume_id': src_volume['id'],
+                    'id': 'tmp-snap-%s' % src_volume['id'],
+                    'volume': src_volume}
+
+        snap_file = dest_volume['name'] + '.' + snapshot['id']
+        snap_path = os.path.join(vol_dir, snap_file)
+        size = dest_volume['size']
+
+        qemu_img_output = """image: %s
+        file format: %s
+        virtual size: 1.0G (1073741824 bytes)
+        disk size: 173K
+        backing file: %s
+        """ % (snap_file, img_format, src_volume['name'])
+        mock_img_info.return_value = imageutils.QemuImgInfo(qemu_img_output)
+
+        with mock.patch.object(drv, '_read_info_file') as \
+                mock_read_info_file, \
+                mock.patch.object(drv, '_set_rw_permissions_for_all') as \
+                mock_permission:
+            mock_read_info_file.return_value = {'active': snap_file,
+                                                snapshot['id']: snap_file}
+            drv._copy_volume_from_snapshot(snapshot, dest_volume, size)
+
+        mock_read_info_file.assert_called_once_with(info_path)
+        mock_img_info.assert_called_once_with(snap_path)
+        mock_convert_image.assert_called_once_with(src_vol_path,
+                                                   dest_vol_path, img_format)
+        mock_permission.assert_called_once_with(dest_vol_path)
+
+    def test_copy_volume_as_raw_from_snapshot(self):
+        self._copy_volume_from_snapshot('raw')
+
+    def test_copy_volume_as_qcow2_from_snapshot(self):
+        self.configuration.nfs_qcow2_volumes = True
+        self._copy_volume_from_snapshot('qcow2')
+
+    def test_create_volume_from_snapshot(self):
+        drv = self._driver
+
+        src_volume = self._simple_volume()
+        snap_ref = {'volume_name': src_volume['name'],
+                    'name': 'clone-snap-%s' % src_volume['id'],
+                    'size': src_volume['size'],
+                    'volume_size': src_volume['size'],
+                    'volume_id': src_volume['id'],
+                    'id': 'tmp-snap-%s' % src_volume['id'],
+                    'volume': src_volume,
+                    'status': 'available'}
+
+        new_volume = DumbVolume()
+        new_volume['size'] = snap_ref['size']
+
+        with mock.patch.object(drv, '_ensure_shares_mounted') as mock_ensure, \
+                mock.patch.object(drv, '_find_share',
+                                  return_value=self.TEST_NFS_EXPORT1) as \
+                mock_find_share, \
+                mock.patch.object(drv, '_do_create_volume') as \
+                mock_do_create_volume, \
+                mock.patch.object(drv, '_copy_volume_from_snapshot') as \
+                mock_copy_from_snapshot:
+            drv.create_volume_from_snapshot(new_volume, snap_ref)
+
+        mock_ensure.assert_called_once_with()
+        mock_find_share.assert_called_once_with(new_volume['size'])
+        mock_do_create_volume.assert_called_once_with(new_volume)
+        mock_copy_from_snapshot.assert_called_once_with(
+            snap_ref, new_volume, new_volume['size'])
+
+    def test_create_volume_from_snapshot_status_not_available(self):
+        """Expect an error when the snapshot's status is not 'available'."""
+        drv = self._driver
+
+        src_volume = self._simple_volume()
+        snap_ref = {'volume_name': src_volume['name'],
+                    'name': 'clone-snap-%s' % src_volume['id'],
+                    'size': src_volume['size'],
+                    'volume_size': src_volume['size'],
+                    'volume_id': src_volume['id'],
+                    'id': 'tmp-snap-%s' % src_volume['id'],
+                    'volume': src_volume,
+                    'status': 'error'}
+
+        new_volume = DumbVolume()
+        new_volume['size'] = snap_ref['size']
+
+        self.assertRaises(exception.InvalidSnapshot,
+                          drv.create_volume_from_snapshot,
+                          new_volume,
+                          snap_ref)
+
+    @mock.patch.object(image_utils, 'qemu_img_info')
+    def test_initialize_connection(self, mock_img_info):
+        drv = self._driver
+
+        volume = self._simple_volume()
+        vol_dir = os.path.join(self.TEST_MNT_POINT_BASE,
+                               drv._get_hash_str(self.TEST_NFS_EXPORT1))
+        vol_path = os.path.join(vol_dir, volume['name'])
+
+        qemu_img_output = """image: %s
+        file format: raw
+        virtual size: 1.0G (1073741824 bytes)
+        disk size: 173K
+        """ % volume['name']
+        mock_img_info.return_value = imageutils.QemuImgInfo(qemu_img_output)
+
+        conn_info = drv.initialize_connection(volume, None)
+        mock_img_info.assert_called_once_with(vol_path)
+
+        self.assertEqual('raw', conn_info['data']['format'])
+        self.assertEqual('nfs', conn_info['driver_volume_type'])
+        self.assertEqual(volume['name'], conn_info['data']['name'])
+        self.assertEqual(self.TEST_MNT_POINT_BASE,
+                         conn_info['mount_point_base'])
+
+    @mock.patch.object(image_utils, 'qemu_img_info')
+    def test_initialize_connection_raies_exception(self, mock_img_info):
+        drv = self._driver
+        volume = self._simple_volume()
+
+        qemu_img_output = """image: %s
+        file format: iso
+        virtual size: 1.0G (1073741824 bytes)
+        disk size: 173K
+        """ % volume['name']
+        mock_img_info.return_value = imageutils.QemuImgInfo(qemu_img_output)
+
+        self.assertRaises(exception.InvalidVolume,
+                          drv.initialize_connection,
+                          volume,
+                          None)
+
+    def test_create_snapshot(self):
+        drv = self._driver
+        volume = self._simple_volume()
+        snapshot = {'volume_name': volume['name'],
+                    'name': 'clone-snap-%s' % volume['id'],
+                    'size': volume['size'],
+                    'volume_size': volume['size'],
+                    'volume_id': volume['id'],
+                    'id': 'tmp-snap-%s' % volume['id'],
+                    'volume': volume}
+        vol_dir = os.path.join(self.TEST_MNT_POINT_BASE,
+                               drv._get_hash_str(self.TEST_NFS_EXPORT1))
+        snap_file = volume['name'] + '.' + snapshot['id']
+        snap_path = os.path.join(vol_dir, snap_file)
+        info_path = os.path.join(vol_dir, volume['name']) + '.info'
+
+        with mock.patch.object(drv, '_local_path_volume_info',
+                               return_value=info_path), \
+                mock.patch.object(drv, '_read_info_file', return_value={}), \
+                mock.patch.object(drv, '_do_create_snapshot') \
+                as mock_do_create_snapshot, \
+                mock.patch.object(drv, '_write_info_file') \
+                as mock_write_info_file, \
+                mock.patch.object(drv, 'get_active_image_from_info',
+                                  return_value=volume['name']), \
+                mock.patch.object(drv, '_get_new_snap_path',
+                                  return_value=snap_path):
+            self._driver.create_snapshot(snapshot)
+
+        mock_do_create_snapshot.assert_called_with(snapshot, volume['name'],
+                                                   snap_path)
+        mock_write_info_file.assert_called_with(
+            info_path, {'active': snap_file, snapshot['id']: snap_file})
 
 
 class NfsDriverDoSetupTestCase(test.TestCase):

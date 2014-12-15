@@ -21,6 +21,7 @@ from os_brick.remotefs import remotefs as remotefs_brick
 from oslo_concurrency import processutils as putils
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_utils import fileutils
 from oslo_utils import units
 import six
 
@@ -30,6 +31,7 @@ from cinder.image import image_utils
 from cinder import utils
 from cinder.volume import driver
 from cinder.volume.drivers import remotefs
+from cinder.volume.drivers.remotefs import locked_volume_id_operation
 
 VERSION = '1.3.1'
 
@@ -45,6 +47,9 @@ nfs_opts = [
                 help=('Create volumes as sparsed files which take no space.'
                       'If set to False volume is created as regular file.'
                       'In such case volume creation takes a lot of time.')),
+    cfg.BoolOpt('nfs_qcow2_volumes',
+                default=False,
+                help=('Create volumes as QCOW2 files rather than raw files.')),
     cfg.StrOpt('nfs_mount_point_base',
                default='$state_path/mnt',
                help=('Base dir containing mount points for NFS shares.')),
@@ -63,11 +68,8 @@ CONF = cfg.CONF
 CONF.register_opts(nfs_opts)
 
 
-class NfsDriver(driver.ExtendVD, remotefs.RemoteFSDriver):
-    """NFS based cinder driver.
-
-    Creates file on NFS share for using it as block device on hypervisor.
-    """
+class NfsDriver(remotefs.RemoteFSSnapDriver, driver.ExtendVD):
+    """NFS-based Cinder driver."""
 
     driver_volume_type = 'nfs'
     driver_prefix = 'nfs'
@@ -104,6 +106,18 @@ class NfsDriver(driver.ExtendVD, remotefs.RemoteFSDriver):
         self.reserved_percentage = self.configuration.reserved_percentage
         self.max_over_subscription_ratio = (
             self.configuration.max_over_subscription_ratio)
+
+    def initialize_connection(self, volume, connector):
+        res = super(NfsDriver, self).initialize_connection(volume, connector)
+        # Test file for raw vs. qcow2 format
+        path_to_vol = self._local_path_volume(volume)
+        info = self._qemu_img_info(path_to_vol, volume['name'])
+        if info.file_format not in ['raw', 'qcow2']:
+            msg = _('nfs volume must be a valid raw or qcow2 image.')
+            raise exception.InvalidVolume(reason=msg)
+
+        res['data']['format'] = info.file_format
+        return res
 
     def do_setup(self, context):
         """Any initialization the volume driver does while starting."""
@@ -364,10 +378,15 @@ class NfsDriver(driver.ExtendVD, remotefs.RemoteFSDriver):
 
         # If secure NAS, update the '_execute_as_root' flag to not
         # run as the root user; run as process' user ID.
+
+        # TODO(eharney): need to separate secure NAS vs. execute as root.
+        # There are requirements to run some commands as root even
+        # when running in secure NAS mode. (i.e. read volume file
+        # attached to an instance and owned by qemu:qemu)
         if self.configuration.nas_secure_file_operations == 'true':
             self._execute_as_root = False
 
-        LOG.debug('NAS variable secure_file_operations setting is: %s',
+        LOG.debug('NAS secure file operations setting is: %s',
                   self.configuration.nas_secure_file_operations)
 
         if self.configuration.nas_secure_file_operations == 'false':
@@ -392,8 +411,6 @@ class NfsDriver(driver.ExtendVD, remotefs.RemoteFSDriver):
         :param original_volume_status: The status of the original volume
         :returns: model_update to update DB with any needed changes
         """
-        # TODO(vhou) This method may need to be updated after
-        # NFS snapshots are introduced.
         name_id = None
         if original_volume_status == 'available':
             current_name = CONF.volume_name_template % new_volume['id']
@@ -440,3 +457,83 @@ class NfsDriver(driver.ExtendVD, remotefs.RemoteFSDriver):
         data['thick_provisioning_support'] = not thin_enabled
 
         self._stats = data
+
+    @locked_volume_id_operation
+    def create_volume(self, volume):
+        """Apply locking to the create volume operation."""
+
+        return super(NfsDriver, self).create_volume(volume)
+
+    @locked_volume_id_operation
+    def create_volume_from_snapshot(self, volume, snapshot):
+        return self._create_volume_from_snapshot(volume, snapshot)
+
+    @locked_volume_id_operation
+    def delete_volume(self, volume):
+        """Deletes a logical volume."""
+
+        super(NfsDriver, self).delete_volume(volume)
+
+        # If an exception (e.g. timeout) occurred during delete_snapshot, the
+        # base volume may linger around, so just delete it if it exists
+        if volume['provider_location'] is not None:
+            base_volume_path = self._local_path_volume(volume)
+            fileutils.delete_if_exists(base_volume_path)
+
+            info_path = self._local_path_volume_info(volume)
+            fileutils.delete_if_exists(info_path)
+
+    def _qemu_img_info(self, path, volume_name):
+        return super(NfsDriver, self)._qemu_img_info_base(
+            path, volume_name, self.configuration.nfs_mount_point_base)
+
+    @locked_volume_id_operation
+    def create_snapshot(self, snapshot):
+        """Apply locking to the create snapshot operation."""
+        return self._create_snapshot(snapshot)
+
+    @locked_volume_id_operation
+    def delete_snapshot(self, snapshot):
+        """Apply locking to the delete snapshot operation."""
+
+        return self._delete_snapshot(snapshot)
+
+    def _copy_volume_from_snapshot(self, snapshot, volume, volume_size):
+        """Copy data from snapshot to destination volume.
+
+        This is done with a qemu-img convert to raw/qcow2 from the snapshot
+        qcow2.
+        """
+
+        LOG.debug("snapshot: %(snap)s, volume: %(vol)s, "
+                  "volume_size: %(size)s",
+                  {'snap': snapshot['id'],
+                   'vol': volume['id'],
+                   'size': volume_size})
+
+        info_path = self._local_path_volume_info(snapshot['volume'])
+        snap_info = self._read_info_file(info_path)
+        vol_path = self._local_volume_dir(snapshot['volume'])
+        forward_file = snap_info[snapshot['id']]
+        forward_path = os.path.join(vol_path, forward_file)
+
+        # Find the file which backs this file, which represents the point
+        # when this snapshot was created.
+        img_info = self._qemu_img_info(forward_path,
+                                       snapshot['volume']['name'])
+        path_to_snap_img = os.path.join(vol_path, img_info.backing_file)
+
+        path_to_new_vol = self._local_path_volume(volume)
+
+        LOG.debug("will copy from snapshot at %s", path_to_snap_img)
+
+        if self.configuration.nfs_qcow2_volumes:
+            out_format = 'qcow2'
+        else:
+            out_format = 'raw'
+
+        image_utils.convert_image(path_to_snap_img,
+                                  path_to_new_vol,
+                                  out_format)
+
+        self._set_rw_permissions_for_all(path_to_new_vol)

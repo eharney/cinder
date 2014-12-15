@@ -105,11 +105,10 @@ def _sizestr(size_in_g):
     return '%sG' % size_in_g
 
 
-class GPFSDriver(driver.ConsistencyGroupVD, driver.ExtendVD,
-                 driver.LocalVD, driver.TransferVD,
-                 driver.CloneableImageVD, driver.SnapshotVD,
-                 driver.MigrateVD,
-                 driver.BaseVD):
+class GPFSDriver(driver.ConsistencyGroupVD, driver.LocalVD,
+                 driver.TransferVD, driver.CloneableImageVD,
+                 driver.MigrateVD, driver.BaseVD,
+                 driver.SnapshotVD, driver.ExtendVD):
     """Implements volume functions using GPFS primitives.
 
     Version history:
