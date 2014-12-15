@@ -30,9 +30,12 @@ from cinder.openstack.common import log as logging
 from cinder import utils
 from cinder.volume.drivers import remotefs
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 
 LOG = logging.getLogger(__name__)
+
+locked_volume_id_operation = remotefs.RemoteFSSnapDriver.locked_volume_id_operation
+locked_volume_id_snapshot_operation = remotefs.RemoteFSSnapDriver.locked_volume_id_snapshot_operation
 
 nfs_opts = [
     cfg.StrOpt('nfs_shares_config',
@@ -72,10 +75,8 @@ CONF = cfg.CONF
 CONF.register_opts(nfs_opts)
 
 
-class NfsDriver(remotefs.RemoteFSDriver):
-    """NFS based cinder driver. Creates file on NFS share for using it
-    as block device on hypervisor.
-    """
+class NfsDriver(remotefs.RemoteFSSnapDriver):
+    """NFS-based Cinder driver."""
 
     driver_volume_type = 'nfs'
     driver_prefix = 'nfs'
@@ -355,3 +356,50 @@ class NfsDriver(remotefs.RemoteFSDriver):
                          "environment. Please see %s "
                          "for information on a secure NAS configuration.") %
                      doc_html)
+
+    @locked_volume_id_operation
+    def create_volume(self, volume):
+        """Apply locking to the create volume operation."""
+        volume['provider_location'] = self._find_share(volume['size'])
+        # TODO: handle upgrades
+
+        super(NfsDriver, self).create_volume(volume)
+
+        # Must set provider_location so that later operations know
+        # where the volume data is stored.
+        return {'provider_location': volume['provider_location']}
+
+    @locked_volume_id_operation
+    def delete_volume(self, volume):
+        """Deletes a logical volume."""
+
+        if not volume['provider_location']:
+            LOG.warn(_LW('Volume %s does not have '
+                         'provider_location specified, '
+                         'skipping'), volume['name'])
+            return
+
+        self._ensure_share_mounted(volume['provider_location'])
+
+        volume_dir = self._local_volume_dir(volume)
+        mounted_path = os.path.join(volume_dir,
+                                    self.get_active_image_from_info(volume))
+
+        self._execute('rm', '-f', mounted_path, run_as_root=True)
+
+        # If an exception (e.g. timeout) occurred during delete_snapshot, the
+        # base volume may linger around, so just delete it if it exists
+        base_volume_path = self._local_path_volume(volume)
+        fileutils.delete_if_exists(base_volume_path)
+
+        info_path = self._local_path_volume_info(volume)
+        fileutils.delete_if_exists(info_path)
+
+    def _qemu_img_info(self, path, volume_name):
+        return super(NfsDriver, self)._qemu_img_info_base(
+            path, volume_name, self.configuration.nfs_mount_point_base)
+
+    @locked_volume_id_snapshot_operation
+    def create_snapshot(self, snapshot):
+        """Apply locking to the create snapshot operation."""
+        return self._create_snapshot(snapshot)

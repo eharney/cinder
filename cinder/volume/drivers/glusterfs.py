@@ -258,10 +258,6 @@ class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
 
         return self._create_snapshot(snapshot)
 
-    def _get_matching_backing_file(self, backing_chain, snapshot_file):
-        return next(f for f in backing_chain
-                    if f.get('backing-filename', '') == snapshot_file)
-
     @locked_volume_id_snapshot_operation
     def delete_snapshot(self, snapshot):
         """Apply locking to the delete snapshot operation."""
