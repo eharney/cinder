@@ -31,6 +31,7 @@ from cinder import exception
 from cinder.i18n import _, _LE, _LI, _LW
 from cinder.image import image_utils
 from cinder.openstack.common import log as logging
+from cinder import utils
 from cinder.volume import driver
 
 LOG = logging.getLogger(__name__)
@@ -75,6 +76,8 @@ nas_opts = [
 
 CONF = cfg.CONF
 CONF.register_opts(nas_opts)
+
+lock_tag = 'remotefs'
 
 
 class RemoteFSDriver(driver.VolumeDriver):
@@ -1333,3 +1336,47 @@ class RemoteFSSnapDriver(RemoteFSDriver):
         path_to_delete = os.path.join(
             self._local_volume_dir(snapshot['volume']), file_to_delete)
         self._execute('rm', '-f', path_to_delete, run_as_root=True)
+
+    def _get_matching_backing_file(self, backing_chain, snapshot_file):
+        return next(f for f in backing_chain
+                    if f.get('backing-filename', '') == snapshot_file)
+
+    @staticmethod
+    def locked_volume_id_operation(f, external=False):
+        """Lock decorator for volume operations.
+
+        Takes a named lock prior to executing the operation. The lock is named
+        with the id of the volume. This lock can then be used
+        by other operations to avoid operation conflicts on shared volumes.
+
+        May be applied to methods of signature:
+            method(<self>, volume, *, **)
+        """
+
+        def lvo_inner1(inst, volume, *args, **kwargs):
+            @utils.synchronized('%s-%s' % (lock_tag, volume['id']),
+                                external=external)
+            def lvo_inner2(*_args, **_kwargs):
+                return f(*_args, **_kwargs)
+            return lvo_inner2(inst, volume, *args, **kwargs)
+        return lvo_inner1
+
+    @staticmethod
+    def locked_volume_id_snapshot_operation(f, external=False):
+        """Lock decorator for volume operations that use snapshot objects.
+
+        Takes a named lock prior to executing the operation. The lock is named
+        with the id of the volume. This lock can then be used
+        by other operations to avoid operation conflicts on shared volumes.
+
+        May be applied to methods of signature:
+            method(<self>, snapshot, *, **)
+        """
+
+        def lso_inner1(inst, snapshot, *args, **kwargs):
+            @utils.synchronized('%s-%s' % (lock_tag, snapshot['volume']['id']),
+                                external=external)
+            def lso_inner2(*_args, **_kwargs):
+                return f(*_args, **_kwargs)
+            return lso_inner2(inst, snapshot, *args, **kwargs)
+        return lso_inner1

@@ -53,47 +53,8 @@ CONF = cfg.CONF
 CONF.register_opts(volume_opts)
 
 lock_tag = 'glusterfs'
-
-
-def locked_volume_id_operation(f, external=False):
-    """Lock decorator for volume operations.
-
-       Takes a named lock prior to executing the operation. The lock is named
-       with the id of the volume. This lock can then be used
-       by other operations to avoid operation conflicts on shared volumes.
-
-       May be applied to methods of signature:
-          method(<self>, volume, *, **)
-    """
-
-    def lvo_inner1(inst, volume, *args, **kwargs):
-        @utils.synchronized('%s-%s' % (lock_tag, volume['id']),
-                            external=external)
-        def lvo_inner2(*_args, **_kwargs):
-            return f(*_args, **_kwargs)
-        return lvo_inner2(inst, volume, *args, **kwargs)
-    return lvo_inner1
-
-
-def locked_volume_id_snapshot_operation(f, external=False):
-    """Lock decorator for volume operations that use snapshot objects.
-
-       Takes a named lock prior to executing the operation. The lock is named
-       with the id of the volume. This lock can then be used
-       by other operations to avoid operation conflicts on shared volumes.
-
-       May be applied to methods of signature:
-          method(<self>, snapshot, *, **)
-    """
-
-    def lso_inner1(inst, snapshot, *args, **kwargs):
-        @utils.synchronized('%s-%s' % (lock_tag, snapshot['volume']['id']),
-                            external=external)
-        def lso_inner2(*_args, **_kwargs):
-            return f(*_args, **_kwargs)
-        return lso_inner2(inst, snapshot, *args, **kwargs)
-    return lso_inner1
-
+locked_volume_id_operation = remotefs_drv.RemoteFSSnapDriver.locked_volume_id_operation
+locked_volume_id_snapshot_operation = remotefs_drv.RemoteFSSnapDriver.locked_volume_id_snapshot_operation
 
 class GlusterfsDriver(remotefs_drv.RemoteFSSnapDriver):
     """Gluster based cinder driver. Creates file on Gluster share for using it
