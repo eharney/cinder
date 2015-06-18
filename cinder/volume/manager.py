@@ -1940,6 +1940,14 @@ class VolumeManager(manager.SchedulerDependentManager):
         LOG.info(_LI("Migrate volume completed successfully."),
                  resource=volume)
 
+    def _get_volume_stats(self, refresh=True):
+        stats = self.driver.get_volume_stats(refresh=refresh)
+        if stats.get('reserved_percentage') is None:
+            reserved = self.configuration.reserved_percentage
+            stats['reserved_percentage'] = reserved
+
+        return stats
+
     @periodic_task.periodic_task
     def _report_driver_status(self, context):
         if not self.driver.initialized:
@@ -1955,7 +1963,7 @@ class VolumeManager(manager.SchedulerDependentManager):
                         resource={'type': 'driver',
                                   'id': self.driver.__class__.__name__})
         else:
-            volume_stats = self.driver.get_volume_stats(refresh=True)
+            volume_stats = self._get_volume_stats(refresh=True)
             if self.extra_capabilities:
                 volume_stats.update(self.extra_capabilities)
             if volume_stats:
