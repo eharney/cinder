@@ -223,6 +223,8 @@ class ConsistencyGroupsController(wsgi.Controller):
             msg = _("Incorrect request body format")
             raise exc.HTTPBadRequest(explanation=msg)
         name = consistencygroup.get('name', None)
+        if name:
+            utils.check_string_length(name, 'name', max_length=255)
         description = consistencygroup.get('description', None)
         volume_types = consistencygroup.get('volume_types', None)
         if not volume_types:

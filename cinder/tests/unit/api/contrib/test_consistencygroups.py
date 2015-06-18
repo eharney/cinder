@@ -902,3 +902,21 @@ class ConsistencyGroupsAPITestCase(test.TestCase):
         db.cgsnapshot_destroy(ctxt.elevated(), cgsnapshot_id)
         db.volume_destroy(ctxt.elevated(), volume_id)
         db.consistencygroup_destroy(ctxt.elevated(), consistencygroup_id)
+
+    def test_create_consistencygroup_name_too_long(self):
+        name = 'x' * 256
+        body = {"consistencygroup": {"name": name,
+                                     "description":
+                                     "Consistency Group 1", }}
+        req = webob.Request.blank('/v2/fake/consistencygroups')
+        req.method = 'POST'
+        req.headers['Content-Type'] = 'application/json'
+        req.body = json.dumps(body)
+        res = req.get_response(fakes.wsgi_app())
+        res_dict = json.loads(res.body)
+
+        self.assertEqual(400, res.status_int)
+        self.assertEqual(400, res_dict['badRequest']['code'])
+        msg = (_('volume_types must be provided to create '
+                 'consistency group %s.') % name)
+        self.assertEqual(msg, res_dict['badRequest']['message'])
