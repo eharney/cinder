@@ -83,7 +83,6 @@ fake_opt = [
     cfg.StrOpt('fake_opt1', default='fake', help='fake opts')
 ]
 
-FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa'
 
 
 class FakeImageService(object):
@@ -99,6 +98,9 @@ class FakeImageService(object):
 
 class BaseVolumeTestCase(test.TestCase):
     """Test Case for volumes."""
+
+    FAKE_UUID = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa'
+
     def setUp(self):
         super(BaseVolumeTestCase, self).setUp()
         self.extension_manager = extension.ExtensionManager(
@@ -238,11 +240,6 @@ class AvailabilityZoneTestCase(BaseVolumeTestCase):
 
 class VolumeTestCase(BaseVolumeTestCase):
 
-    def _fake_create_iscsi_target(self, name, tid,
-                                  lun, path, chap_auth=None,
-                                  **kwargs):
-            return 1
-
     def setUp(self):
         super(VolumeTestCase, self).setUp()
         self.stubs.Set(volutils, 'clear_volume',
@@ -250,9 +247,6 @@ class VolumeTestCase(BaseVolumeTestCase):
                        volume_clear_size=mox.IgnoreArg(),
                        lvm_type=mox.IgnoreArg(),
                        throttle=mox.IgnoreArg(): None)
-        self.stubs.Set(tgt.TgtAdm,
-                       'create_iscsi_target',
-                       self._fake_create_iscsi_target)
 
     def test_init_host_clears_downloads(self):
         """Test that init_host will unwedge a volume stuck in downloading."""
@@ -484,7 +478,6 @@ class VolumeTestCase(BaseVolumeTestCase):
     @mock.patch.object(QUOTAS, 'commit')
     @mock.patch.object(QUOTAS, 'reserve')
     def test_delete_driver_not_initialized(self, reserve, commit, rollback):
-        # NOTE(flaper87): Set initialized to False
         self.volume.driver._initialized = False
 
         def fake_reserve(context, expire=None, project_id=None, **deltas):
@@ -514,22 +507,12 @@ class VolumeTestCase(BaseVolumeTestCase):
         self.assertEqual("error_deleting", volume.status)
         db.volume_destroy(context.get_admin_context(), volume_id)
 
-    def test_create_delete_volume(self):
+    @mock.patch('cinder.quota.QUOTAS.rollback', new=mock.Mock())
+    @mock.patch('cinder.quota.QUOTAS.commit', new=mock.Mock())
+    @mock.patch('cinder.quota.QUOTAS.reserve')
+    def test_create_delete_volume(self, mock_reserve):
         """Test volume can be created and deleted."""
-        # Need to stub out reserve, commit, and rollback
-        def fake_reserve(context, expire=None, project_id=None, **deltas):
-            return ["RESERVATION"]
-
-        def fake_commit(context, reservations, project_id=None):
-            pass
-
-        def fake_rollback(context, reservations, project_id=None):
-            pass
-
-        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
-        self.stubs.Set(QUOTAS, "commit", fake_commit)
-        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
-
+        mock_reserve.return_value = ['RESERVATION']
         volume = tests_utils.create_volume(
             self.context,
             availability_zone=CONF.storage_availability_zone,
@@ -618,18 +601,14 @@ class VolumeTestCase(BaseVolumeTestCase):
                           None,
                           test_meta)
 
-    def test_create_volume_uses_default_availability_zone(self):
+    @mock.patch.object(cinder.volume.api.API, 'list_availability_zones')
+    def test_create_volume_uses_default_availability_zone(self, mock_list_az):
         """Test setting availability_zone correctly during volume create."""
+        mock_list_az.return_value = ({'name': 'az1', 'available': True},
+                                     {'name': 'az2', 'available': True},
+                                     {'name': 'default-az', 'available': True})
+
         volume_api = cinder.volume.api.API()
-
-        def fake_list_availability_zones(enable_cache=False):
-            return ({'name': 'az1', 'available': True},
-                    {'name': 'az2', 'available': True},
-                    {'name': 'default-az', 'available': True})
-
-        self.stubs.Set(volume_api,
-                       'list_availability_zones',
-                       fake_list_availability_zones)
 
         # Test backwards compatibility, default_availability_zone not set
         self.override_config('storage_availability_zone', 'az2')
@@ -646,21 +625,11 @@ class VolumeTestCase(BaseVolumeTestCase):
                                    'description')
         self.assertEqual('default-az', volume['availability_zone'])
 
-    def test_create_volume_with_volume_type(self):
+    @mock.patch.object(QUOTAS, "rollback")
+    @mock.patch.object(QUOTAS, "commit")
+    @mock.patch.object(QUOTAS, "reserve", return_value=["RESERVATION"])
+    def test_create_volume_with_volume_type(self, *_unused_mocks):
         """Test volume creation with default volume type."""
-        def fake_reserve(context, expire=None, project_id=None, **deltas):
-            return ["RESERVATION"]
-
-        def fake_commit(context, reservations, project_id=None):
-            pass
-
-        def fake_rollback(context, reservations, project_id=None):
-            pass
-
-        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
-        self.stubs.Set(QUOTAS, "commit", fake_commit)
-        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
-
         volume_api = cinder.volume.api.API()
 
         # Create volume with default volume type while default
@@ -702,8 +671,9 @@ class VolumeTestCase(BaseVolumeTestCase):
                                    volume_type=db_vol_type)
         self.assertEqual(db_vol_type.get('id'), volume['volume_type_id'])
 
+    @mock.patch.object(keymgr, 'API', fake_keymgr.fake_api)
     def test_create_volume_with_encrypted_volume_type(self):
-        self.stubs.Set(keymgr, "API", fake_keymgr.fake_api)
+        #self.stubs.Set(keymgr, "API", fake_keymgr.fake_api)
 
         ctxt = context.get_admin_context()
 
@@ -737,8 +707,9 @@ class VolumeTestCase(BaseVolumeTestCase):
         self.volume.create_volume(self.context, volume['id'])
         self.assertEqual('1111-aaaa', volume['provider_id'])
 
-    def test_create_delete_volume_with_encrypted_volume_type(self):
-        self.stubs.Set(keymgr, "API", fake_keymgr.fake_api)
+    @mock.patch.object(keymgr, 'API', fake_keymgr.fake_api)
+    def test_create_delete_volume_with_encrypted_volume_type(self, *_unused_mocks):
+        #self.stubs.Set(keymgr, "API", fake_keymgr.fake_api)
 
         ctxt = context.get_admin_context()
 
@@ -1225,7 +1196,6 @@ class VolumeTestCase(BaseVolumeTestCase):
                                             size=volume_src['size'])['id']
         snapshot_obj = objects.Snapshot.get_by_id(self.context, snapshot_id)
 
-        # NOTE(flaper87): Set initialized to False
         self.volume.driver._initialized = False
 
         self.assertRaises(exception.DriverNotInitialized,
@@ -1236,7 +1206,6 @@ class VolumeTestCase(BaseVolumeTestCase):
         snapshot = db.snapshot_get(context.get_admin_context(), snapshot_id)
         self.assertEqual("error", snapshot.status)
 
-        # NOTE(flaper87): Set initialized to True,
         # lets cleanup the mess
         self.volume.driver._initialized = True
         self.volume.delete_snapshot(self.context, snapshot_obj)
@@ -1255,14 +1224,12 @@ class VolumeTestCase(BaseVolumeTestCase):
     def _fake_execute(self, *cmd, **kwargs):
         pass
 
-    def test_create_volume_from_snapshot_check_locks(self):
+    @mock.patch('cinder.volume.targets.tgt.TgtAdm.create_iscsi_target', return_value=1)
+    @mock.patch.object(cinder.volume.drivers.lvm.LVMISCSIDriver, 'create_volume_from_snapshot')
+    def test_create_volume_from_snapshot_check_locks(self, *_unused_mocks):
         # mock the synchroniser so we can record events
-        self.stubs.Set(utils, 'synchronized', self._mock_synchronized)
-
-        self.stubs.Set(self.volume.driver, 'create_volume_from_snapshot',
-                       lambda *args, **kwargs: None)
-
         orig_flow = engine.ActionEngine.run
+        self.stubs.Set(utils, 'synchronized', self._mock_synchronized)
 
         def mock_flow_run(*args, **kwargs):
             # ensure the lock has been taken
@@ -1684,12 +1651,11 @@ class VolumeTestCase(BaseVolumeTestCase):
         self.assertRaises(exception.VolumeNotFound, db.volume_get,
                           self.context, src_vol_id)
 
+    @mock.patch.object(keymgr, 'API', fake_keymgr.fake_api)
     def test_create_volume_from_snapshot_with_encryption(self):
         """Test volume can be created from a snapshot of
         an encrypted volume.
         """
-        self.stubs.Set(keymgr, 'API', fake_keymgr.fake_api)
-
         ctxt = context.get_admin_context()
 
         db.volume_type_create(ctxt,
@@ -2721,7 +2687,7 @@ class VolumeTestCase(BaseVolumeTestCase):
     @mock.patch.object(db, 'volume_get')
     def test_reserve_volume_success(self, volume_get, volume_update):
         fake_volume = {
-            'id': FAKE_UUID,
+            'id': self.FAKE_UUID,
             'status': 'available'
         }
 
@@ -2738,7 +2704,7 @@ class VolumeTestCase(BaseVolumeTestCase):
 
     def test_reserve_volume_bad_status(self):
         fake_volume = {
-            'id': FAKE_UUID,
+            'id': self.FAKE_UUID,
             'status': 'attaching'
         }
 
@@ -2757,10 +2723,10 @@ class VolumeTestCase(BaseVolumeTestCase):
                                       volume_attachment_get_used_by_volume_id,
                                       volume_update):
         fake_volume = {
-            'id': FAKE_UUID,
+            'id': self.FAKE_UUID,
             'status': 'attaching'
         }
-        fake_attachments = [{'volume_id': FAKE_UUID,
+        fake_attachments = [{'volume_id': self.FAKE_UUID,
                              'instance_uuid': 'fake_instance_uuid'}]
 
         volume_get.return_value = fake_volume
@@ -3398,7 +3364,7 @@ class VolumeTestCase(BaseVolumeTestCase):
                           self.context,
                           volume_id, None, None, None,
                           None,
-                          FAKE_UUID)
+                          self.FAKE_UUID)
         volume = db.volume_get(self.context, volume_id)
         self.assertEqual("error", volume['status'])
         self.assertFalse(volume['bootable'])
@@ -3495,20 +3461,10 @@ class VolumeTestCase(BaseVolumeTestCase):
                           self.context, 2,
                           'name', 'description', image_id=1)
 
-    def _do_test_create_volume_with_size(self, size):
-        def fake_reserve(context, expire=None, project_id=None, **deltas):
-            return ["RESERVATION"]
-
-        def fake_commit(context, reservations, project_id=None):
-            pass
-
-        def fake_rollback(context, reservations, project_id=None):
-            pass
-
-        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
-        self.stubs.Set(QUOTAS, "commit", fake_commit)
-        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
-
+    @mock.patch.object(QUOTAS, "rollback")
+    @mock.patch.object(QUOTAS, "commit")
+    @mock.patch.object(QUOTAS, "reserve", return_value=["RESERVATION"])
+    def _do_test_create_volume_with_size(self, size, *_unused_mocks):
         volume_api = cinder.volume.api.API()
 
         volume = volume_api.create(self.context,
@@ -3525,20 +3481,10 @@ class VolumeTestCase(BaseVolumeTestCase):
         """Test volume creation with string size."""
         self._do_test_create_volume_with_size('2')
 
-    def test_create_volume_with_bad_size(self):
-        def fake_reserve(context, expire=None, project_id=None, **deltas):
-            return ["RESERVATION"]
-
-        def fake_commit(context, reservations, project_id=None):
-            pass
-
-        def fake_rollback(context, reservations, project_id=None):
-            pass
-
-        self.stubs.Set(QUOTAS, "reserve", fake_reserve)
-        self.stubs.Set(QUOTAS, "commit", fake_commit)
-        self.stubs.Set(QUOTAS, "rollback", fake_rollback)
-
+    @mock.patch.object(QUOTAS, "rollback")
+    @mock.patch.object(QUOTAS, "commit")
+    @mock.patch.object(QUOTAS, "reserve", return_value=["RESERVATION"])
+    def test_create_volume_with_bad_size(self, *_unused_mocks):
         volume_api = cinder.volume.api.API()
 
         self.assertRaises(exception.InvalidInput,
@@ -3701,7 +3647,6 @@ class VolumeTestCase(BaseVolumeTestCase):
                                            host=CONF.host)
         self.volume.create_volume(self.context, volume['id'])
 
-        # NOTE(flaper87): Set initialized to False
         self.volume.driver._initialized = False
 
         self.assertRaises(exception.DriverNotInitialized,
@@ -3712,7 +3657,6 @@ class VolumeTestCase(BaseVolumeTestCase):
         volume = db.volume_get(context.get_admin_context(), volume['id'])
         self.assertEqual('error_extending', volume.status)
 
-        # NOTE(flaper87): Set initialized to True,
         # lets cleanup the mess.
         self.volume.driver._initialized = True
         self.volume.delete_volume(self.context, volume['id'])
@@ -4491,7 +4435,6 @@ class VolumeTestCase(BaseVolumeTestCase):
         volume = db.volume_get(context.get_admin_context(), volume['id'])
         self.assertEqual('error', volume.migration_status)
 
-        # NOTE(flaper87): Set initialized to True,
         # lets cleanup the mess.
         self.volume.driver._initialized = True
         self.volume.delete_volume(self.context, volume['id'])
@@ -5176,7 +5119,7 @@ class CopyVolumeToImageTestCase(BaseVolumeTestCase):
         self.assertEqual('available', volume['status'])
 
     def test_copy_volume_to_image_exception(self):
-        self.image_meta['id'] = FAKE_UUID
+        self.image_meta['id'] = self.FAKE_UUID
         # creating volume testdata
         self.volume_attrs['status'] = 'in-use'
         db.volume_create(self.context, self.volume_attrs)
@@ -6117,7 +6060,6 @@ class VolumePolicyTestCase(test.TestCase):
         cinder.policy.init()
 
         self.context = context.get_admin_context()
-        self.stubs.Set(brick_lvm.LVM, '_vg_exists', lambda x: True)
 
     def test_check_policy(self):
         self.mox.StubOutWithMock(cinder.policy, 'enforce')
