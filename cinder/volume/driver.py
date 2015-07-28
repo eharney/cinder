@@ -922,6 +922,9 @@ class BaseVD(object):
     def validate_connector_has_setting(connector, setting):
         pass
 
+    def retype(self, context, volume, new_type, diff, host):
+        return False, None
+
     # #######  Interface methods for DataPath (Connector) ########
     @abc.abstractmethod
     def ensure_export(self, context, volume):
@@ -1346,9 +1349,6 @@ class VolumeDriver(ConsistencyGroupVD, TransferVD, ManageableVD, ExtendVD,
     def unmanage(self, volume):
         msg = _("Unmanage volume not implemented.")
         raise NotImplementedError(msg)
-
-    def retype(self, context, volume, new_type, diff, host):
-        return False, None
 
     def reenable_replication(self, context, volume):
         msg = _("sync_replica not implemented.")
