@@ -321,16 +321,13 @@ def fetch_to_volume_format(context, image_service,
                 reason=_("fmt=%(fmt)s backed by:%(backing_file)s")
                 % {'fmt': fmt, 'backing_file': backing_file, })
 
-        # NOTE(jdg): I'm using qemu-img convert to write
-        # to the volume regardless if it *needs* conversion or not
-        # TODO(avishay): We can speed this up by checking if the image is raw
-        # and if so, writing directly to the device. However, we need to keep
-        # check via 'qemu-img info' that what we copied was in fact a raw
-        # image and not a different format with a backing file, which may be
-        # malicious.
-        LOG.debug("%s was %s, converting to %s ", image_id, fmt, volume_format)
-        convert_image(tmp, dest, volume_format,
-                      run_as_root=run_as_root)
+        if fmt == 'raw':
+            image_size_m = math.ceil(image_meta['size'] / units.Mi)
+            volume_utils.copy_volume(tmp, dest, image_size_m, blocksize)
+        else:
+            LOG.debug("%s was %s, converting to %s ",
+                      image_id, fmt, volume_format)
+            convert_image(tmp, dest, volume_format, run_as_root=run_as_root)
 
         data = qemu_img_info(dest, run_as_root=run_as_root)
 
