@@ -33,7 +33,7 @@ from cinder.volume import driver
 from cinder.volume.drivers import remotefs
 from cinder.volume.drivers.remotefs import locked_volume_id_operation
 
-VERSION = '1.3.1'
+VERSION = '1.4.0'
 
 LOG = logging.getLogger(__name__)
 
@@ -62,6 +62,11 @@ nfs_opts = [
                      'raising an error.  At least one attempt will be '
                      'made to mount an NFS share, regardless of the '
                      'value specified.')),
+    cfg.BoolOpt('nfs_snapshot_support',
+                default=False,
+                help=('Enable support for snapshots on the NFS driver. '
+                      'Platforms using libvirt <1.2.7 will encounter issues '
+                      'with this feature.')),
 ]
 
 CONF = cfg.CONF
@@ -487,15 +492,25 @@ class NfsDriver(remotefs.RemoteFSSnapDriver, driver.ExtendVD):
         return super(NfsDriver, self)._qemu_img_info_base(
             path, volume_name, self.configuration.nfs_mount_point_base)
 
+    def _check_snapshot_support(self):
+        """Ensure snapshot support is enabled."""
+
+        if not self.configuration.nfs_snapshot_support:
+            msg = _("NFS driver snapshot support is disabled in cinder.conf.")
+            raise exception.VolumeDriverException(msg) # TODO check param
+
     @locked_volume_id_operation
     def create_snapshot(self, snapshot):
         """Apply locking to the create snapshot operation."""
+
+        self._check_snapshot_support()
         return self._create_snapshot(snapshot)
 
     @locked_volume_id_operation
     def delete_snapshot(self, snapshot):
         """Apply locking to the delete snapshot operation."""
 
+        self._check_snapshot_support()
         return self._delete_snapshot(snapshot)
 
     def _copy_volume_from_snapshot(self, snapshot, volume, volume_size):
