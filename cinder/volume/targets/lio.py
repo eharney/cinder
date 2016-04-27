@@ -15,6 +15,7 @@ from oslo_log import log as logging
 
 from cinder import exception
 from cinder.i18n import _LE, _LI, _LW
+from cinder.privileged import target_lio
 from cinder import utils
 from cinder.volume.targets import iscsi
 
@@ -117,18 +118,13 @@ class LioAdm(iscsi.ISCSITarget):
             optional_args.append('-a' + ','.join(kwargs['portals_ips']))
 
         try:
-            command_args = ['cinder-rtstool',
-                            'create',
-                            path,
-                            name,
-                            chap_auth_userid,
-                            chap_auth_password,
-                            self.iscsi_protocol == 'iser'] + optional_args
-            self._execute(*command_args, run_as_root=True)
-        except putils.ProcessExecutionError:
-            LOG.exception(_LE("Failed to create iscsi target for volume "
-                              "id:%s."), vol_id)
-
+            target_lio.create(path,
+                              name,
+                              chap_auth_userid,
+                              chap_auth_password,
+                              self.iscsi_protocol == 'iser',
+                              *optional_args)
+        except Exception:
             raise exception.ISCSITargetCreateFailed(volume_id=vol_id)
 
         iqn = '%s%s' % (self.iscsi_target_prefix, vol_id)
