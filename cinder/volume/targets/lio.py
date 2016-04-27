@@ -14,6 +14,7 @@ from oslo_concurrency import processutils as putils
 from oslo_log import log as logging
 
 from cinder import exception
+from cinder.privileged import target_lio
 from cinder import utils
 from cinder.volume.targets import iscsi
 
@@ -50,13 +51,10 @@ class LioAdm(iscsi.ISCSITarget):
         return utils.execute(*args, **kwargs)
 
     def _get_target(self, iqn):
-        (out, err) = self._execute('cinder-rtstool',
-                                   'get-targets',
-                                   run_as_root=True)
-        lines = out.split('\n')
-        for line in lines:
-            if iqn in line:
-                return line
+        targets = target_lio.get_targets()
+        for item in targets:
+            if iqn in item:
+                return item
 
         return None
 
@@ -94,7 +92,7 @@ class LioAdm(iscsi.ISCSITarget):
         except putils.ProcessExecutionError:
             LOG.warning("Failed to restore iscsi LIO configuration.")
 
-    def create_iscsi_target(self, name, tid, lun, path,
+    def create_iscsi_target(self, name, _tid, _lun, path,
                             chap_auth=None, **kwargs):
         # tid and lun are not used
 
@@ -107,26 +105,16 @@ class LioAdm(iscsi.ISCSITarget):
         if chap_auth is not None:
             (chap_auth_userid, chap_auth_password) = chap_auth
 
-        optional_args = []
-        if 'portals_port' in kwargs:
-            optional_args.append('-p%s' % kwargs['portals_port'])
-
-        if 'portals_ips' in kwargs:
-            optional_args.append('-a' + ','.join(kwargs['portals_ips']))
-
         try:
-            command_args = ['cinder-rtstool',
-                            'create',
-                            path,
-                            name,
-                            chap_auth_userid,
-                            chap_auth_password,
-                            self.iscsi_protocol == 'iser'] + optional_args
-            self._execute(*command_args, run_as_root=True)
-        except putils.ProcessExecutionError:
-            LOG.exception("Failed to create iscsi target for volume "
-                          "id:%s.", vol_id)
-
+            target_lio.create(path,
+                              name,
+                              chap_auth_userid,
+                              chap_auth_password,
+                              self.iscsi_protocol == 'iser',
+                              portals_ips=kwargs.get('portals_ips'),
+                              portals_port=kwargs.get('portals_port'))
+        except Exception:
+            LOG.exception("Failed to create target")
             raise exception.ISCSITargetCreateFailed(volume_id=vol_id)
 
         iqn = '%s%s' % (self.iscsi_target_prefix, vol_id)
@@ -147,13 +135,10 @@ class LioAdm(iscsi.ISCSITarget):
         iqn = '%s%s' % (self.iscsi_target_prefix, vol_uuid_name)
 
         try:
-            self._execute('cinder-rtstool',
-                          'delete',
-                          iqn,
-                          run_as_root=True)
-        except putils.ProcessExecutionError:
-            LOG.exception("Failed to remove iscsi target for volume id:%s.",
-                          vol_id)
+            target_lio.delete(iqn)
+        except Exception:
+            LOG.exception("Failed to remove iscsi target for volume "
+                          "id:%s.", vol_id)
             raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)
 
         # We make changes persistent
@@ -165,16 +150,13 @@ class LioAdm(iscsi.ISCSITarget):
         (auth_method, auth_user, auth_pass) = \
             volume['provider_auth'].split(' ', 3)
 
-        # Add initiator iqns to target ACL
         try:
-            self._execute('cinder-rtstool', 'add-initiator',
-                          volume_iqn,
-                          auth_user,
-                          auth_pass,
-                          connector['initiator'],
-                          run_as_root=True)
-        except putils.ProcessExecutionError:
-            LOG.exception("Failed to add initiator iqn %s to target",
+            target_lio.add_initiator(volume_iqn,
+                                     connector['initiator'],
+                                     auth_user,
+                                     auth_pass)
+        except Exception:
+            LOG.exception(("Failed to add initiator iqn %s to target"),
                           connector['initiator'])
             raise exception.ISCSITargetAttachFailed(
                 volume_id=volume['id'])
@@ -194,11 +176,9 @@ class LioAdm(iscsi.ISCSITarget):
 
         # Delete initiator iqns from target ACL
         try:
-            self._execute('cinder-rtstool', 'delete-initiator',
-                          volume_iqn,
-                          connector['initiator'],
-                          run_as_root=True)
-        except putils.ProcessExecutionError:
+            target_lio.delete_initiator(volume_iqn,
+                                        connector['initiator'])
+        except Exception:
             LOG.exception(
                 "Failed to delete initiator iqn %s from target.",
                 connector['initiator'])

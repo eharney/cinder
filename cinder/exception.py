@@ -1065,6 +1065,10 @@ class TargetUpdateFailed(CinderException):
     message = _("Failed to update target for volume %(volume_id)s.")
 
 
+class LIOTargetError(VolumeBackendAPIException):
+    message = _("%(error_message)s")
+
+
 class ISCSITargetHelperCommandFailed(CinderException):
     message = "%(error_message)s"
 

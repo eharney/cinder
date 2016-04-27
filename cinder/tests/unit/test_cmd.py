@@ -44,6 +44,7 @@ from cinder import context
 from cinder.db.sqlalchemy import api as sqlalchemy_api
 from cinder import exception
 from cinder.objects import fields
+from cinder.privileged import target_lio
 from cinder import test
 from cinder.tests.unit import fake_cluster
 from cinder.tests.unit import fake_constants as fake
@@ -1189,8 +1190,8 @@ class TestCinderRtstoolCmd(test.TestCase):
         rtsroot.side_effect = rtslib_fb.utils.RTSLibError()
 
         with mock.patch('sys.stdout', new=six.StringIO()):
-            self.assertRaises(rtslib_fb.utils.RTSLibError,
-                              cinder_rtstool.create,
+            self.assertRaises(exception.LIOTargetError,
+                              target_lio._create,
                               mock.sentinel.backing_device,
                               mock.sentinel.name,
                               mock.sentinel.userid,
@@ -1216,19 +1217,19 @@ class TestCinderRtstoolCmd(test.TestCase):
 
             if ip == '0.0.0.0':
                 network_portal.side_effect = rtslib_fb.utils.RTSLibError()
-                self.assertRaises(rtslib_fb.utils.RTSLibError,
-                                  cinder_rtstool.create,
+                self.assertRaises(exception.LIOTargetError,
+                                  target_lio.create,
                                   mock.sentinel.backing_device,
                                   mock.sentinel.name,
                                   mock.sentinel.userid,
                                   mock.sentinel.password,
                                   mock.sentinel.iser_enabled)
             else:
-                cinder_rtstool.create(mock.sentinel.backing_device,
-                                      mock.sentinel.name,
-                                      mock.sentinel.userid,
-                                      mock.sentinel.password,
-                                      mock.sentinel.iser_enabled)
+                target_lio.create(mock.sentinel.backing_device,
+                                  mock.sentinel.name,
+                                  mock.sentinel.userid,
+                                  mock.sentinel.password,
+                                  mock.sentinel.iser_enabled)
 
             rts_root.assert_called_once_with()
             block_storage_object.assert_called_once_with(
