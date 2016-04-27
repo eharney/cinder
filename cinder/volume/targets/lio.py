@@ -15,6 +15,7 @@ from oslo_log import log as logging
 
 from cinder import exception
 from cinder.i18n import _LE, _LI, _LW
+from cinder.privileged import target_lio
 from cinder import utils
 from cinder.volume.targets import iscsi
 
@@ -52,13 +53,10 @@ class LioAdm(iscsi.ISCSITarget):
         return utils.execute(*args, **kwargs)
 
     def _get_target(self, iqn):
-        (out, err) = self._execute('cinder-rtstool',
-                                   'get-targets',
-                                   run_as_root=True)
-        lines = out.split('\n')
-        for line in lines:
-            if iqn in line:
-                return line
+        targets = target_lio.get_targets()
+        for item in targets:
+            if iqn in item:
+                return item
 
         return None
 
@@ -149,11 +147,8 @@ class LioAdm(iscsi.ISCSITarget):
         iqn = '%s%s' % (self.iscsi_target_prefix, vol_uuid_name)
 
         try:
-            self._execute('cinder-rtstool',
-                          'delete',
-                          iqn,
-                          run_as_root=True)
-        except putils.ProcessExecutionError:
+            target_lio.delete(iqn)
+        except Exception:
             LOG.exception(_LE("Failed to remove iscsi target for volume "
                               "id:%s."), vol_id)
             raise exception.ISCSITargetRemoveFailed(volume_id=vol_id)

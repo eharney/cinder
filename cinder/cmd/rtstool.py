@@ -154,8 +154,10 @@ def delete_initiator(target_iqn, initiator_iqn):
 
 def get_targets():
     rtsroot = rtslib_fb.root.RTSRoot()
+    targets = []
     for x in rtsroot.targets:
-        print(x.wwn)
+        targets.append(x.wwn)
+    return targets
 
 
 def delete(iqn):
@@ -314,7 +316,9 @@ def main(argv=None):
         delete_initiator(target_iqn, initiator_iqn)
 
     elif argv[1] == 'get-targets':
-        get_targets()
+        targets = get_targets()
+        for t in targets:
+            print(t)
 
     elif argv[1] == 'delete':
         if len(argv) < 3:
