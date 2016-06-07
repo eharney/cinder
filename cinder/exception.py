@@ -998,6 +998,9 @@ class ISCSITargetDetachFailed(CinderException):
 class ISCSITargetHelperCommandFailed(CinderException):
     message = _("%(error_message)s")
 
+class LIOTargetError(VolumeBackendAPIException):
+    message = _("%(error_message)s")
+
 
 # X-IO driver exception.
 class XIODriverException(VolumeDriverException):
