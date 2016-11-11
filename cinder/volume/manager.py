@@ -217,14 +217,20 @@ class VolumeManager(manager.CleanableManager,
                 requests.packages.urllib3.exceptions.InsecurePlatformWarning)
 
         self.key_manager = key_manager.API(CONF)
-        self.driver = importutils.import_object(
-            volume_driver,
-            configuration=self.configuration,
-            db=self.db,
-            host=self.host,
-            is_vol_db_empty=vol_db_empty,
-            active_backend_id=curr_active_backend_id)
-        self.message_api = message_api.API()
+        try:
+            self.driver = importutils.import_object(
+                volume_driver,
+                configuration=self.configuration,
+                db=self.db,
+                host=self.host,
+                is_vol_db_empty=vol_db_empty,
+                active_backend_id=curr_active_backend_id)
+            self.message_api = message_api.API()
+        except Exception:
+            LOG.exception("Failed to import volume driver: %s", volume_driver)
+            self.driver = None
+            time.sleep(5)
+            return
 
         if CONF.profiler.enabled and profiler is not None:
             self.driver = profiler.trace_cls("driver")(self.driver)
@@ -373,6 +379,15 @@ class VolumeManager(manager.CleanableManager,
 
     def init_host(self, added_to_cluster=None, **kwargs):
         """Perform any required initialization."""
+        if self.driver is None:
+            # An error occurred during the volume driver's
+            # import or __init__.
+            msg = _LE("Failed to load driver.")
+            LOG.error(msg,
+                      resource={'type': 'driver',
+                                'id': self.__class__.__name__})
+            raise exception.DriverNotInitialized()
+
         ctxt = context.get_admin_context()
         if not self.driver.supported:
             utils.log_unsupported_driver_warning(self.driver)
