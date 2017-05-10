@@ -3890,6 +3890,10 @@ def volume_type_destroy(context, id):
             models.ConsistencyGroup.volume_type_id.contains(id)).count()
         if results or group_count or cg_count:
             LOG.error('VolumeType %s deletion failed, VolumeType in use.', id)
+            LOG.debug("results: %s", results)
+            if results:
+                LOG.debug("results[0]: %s", results[0]['id'])
+            LOG.debug("group_count: %s", group_count)
             raise exception.VolumeTypeInUse(volume_type_id=id)
         updated_values = {'deleted': True,
                           'deleted_at': utcnow,
