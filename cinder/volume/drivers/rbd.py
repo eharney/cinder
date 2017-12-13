@@ -14,12 +14,15 @@
 """RADOS Block Device Driver"""
 
 from __future__ import absolute_import
+import binascii
 import json
 import math
 import os
 import tempfile
 
+from castellan import key_manager
 from eventlet import tpool
+from os_brick import encryptors
 from os_brick.initiator import linuxrbd
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -684,10 +687,6 @@ class RBDDriver(driver.CloneableImageVD,
     def create_volume(self, volume):
         """Creates a logical volume."""
 
-        if volume.encryption_key_id:
-            message = _("Encryption is not yet supported.")
-            raise exception.VolumeDriverException(message=message)
-
         size = int(volume.size) * units.Gi
 
         LOG.debug("creating volume '%s'", volume.name)
@@ -1262,7 +1261,55 @@ class RBDDriver(driver.CloneableImageVD,
 
         return tmpdir
 
+    def copy_image_to_encrypted_volume(self, context, volume, image_service,
+                                       image_id):
+        self._copy_image_to_volume(context, volume, image_service, image_id,
+                                   encrypted=True)
+
     def copy_image_to_volume(self, context, volume, image_service, image_id):
+        self._copy_image_to_volume(context, volume, image_service, image_id)
+
+    def _encrypt_image(self, context, volume, tmp_dir, src_image_path):
+
+        # Fetch the encryption dict for the volume
+        encryption = self.db.volume_encryption_metadata_get(context, volume.id)
+
+        # Check that this is a LUKS encryption provider
+        provider = encryption.get('provider', None)
+        if provider in encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP:
+            provider = encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP[provider]
+        if provider != encryptors.LUKS:
+            message = _("Provider not supported.")
+            raise exception.VolumeDriverException(message=message)
+
+        # Fetch the key associated with the volume and decode the passphrase
+        keymgr = key_manager.API(CONF)
+        key = keymgr.get(context, encryption['encryption_key_id'])
+        passphrase = binascii.hexlify(key.get_encoded()).decode('utf-8')
+        LOG.debug('lyarwood - %s', passphrase)
+        # Decode the dm-crypt style cipher spec into something qemu-img can use
+        cipher_spec = encryption.get('cipher', None)
+        key_size = encryption.get('key_size', None)
+        if cipher_spec is not None:
+            cipher_spec = image_utils.decode_cipher(cipher_spec, key_size)
+
+        with utils.tempdir() as tmpdir:
+            passphrase_file = os.path.join(tmpdir, 'luks_sec')
+            with open(passphrase_file, 'w') as f:
+                f.write(passphrase)
+
+            # Convert the raw image to luks
+            dest_image_path = src_image_path + '.luks'
+            image_utils.convert_image(src_image_path, dest_image_path,
+                                      'luks', src_format='raw',
+                                      cipher_spec=cipher_spec,
+                                      passphrase_file=passphrase_file)
+
+            # Replce the original image with the now encrypted image
+            os.rename(dest_image_path, src_image_path)
+
+    def _copy_image_to_volume(self, context, volume, image_service, image_id,
+                              encrypted=False):
 
         tmp_dir = self._image_conversion_dir()
 
@@ -1271,6 +1318,9 @@ class RBDDriver(driver.CloneableImageVD,
                                      tmp.name,
                                      self.configuration.volume_dd_blocksize,
                                      size=volume.size)
+
+            if encrypted:
+                self._encrypt_image(context, volume, tmp_dir, tmp.name)
 
             self.delete_volume(volume)
 
