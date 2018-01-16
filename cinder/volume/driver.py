@@ -526,7 +526,7 @@ class BaseVD(object):
         return
 
     @abc.abstractmethod
-    def create_volume(self, volume):
+    def create_volume(self, volume, context=None):
         """Creates a volume.
 
         Can optionally return a Dictionary of changes to the volume object to
@@ -2116,7 +2116,7 @@ class VolumeDriver(ManageableVD, CloneableImageVD, ManageableSnapshotsVD,
     def check_for_setup_error(self):
         raise NotImplementedError()
 
-    def create_volume(self, volume):
+    def create_volume(self, volume, context=None):
         raise NotImplementedError()
 
     def create_volume_from_snapshot(self, volume, snapshot):

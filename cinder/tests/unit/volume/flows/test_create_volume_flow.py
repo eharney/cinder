@@ -1059,7 +1059,7 @@ class CreateVolumeFlowManagerTestCase(test.TestCase):
         fake_driver.create_volume_from_backup.assert_called_once_with(
             volume_obj, backup_obj)
         if driver_error:
-            mock_create_volume.assert_called_once_with(volume_obj)
+            mock_create_volume.assert_called_once_with(volume_obj, self.ctxt)
             mock_get_backup_host.assert_called_once_with(
                 backup_obj.host, backup_obj.availability_zone)
             mock_restore_backup.assert_called_once_with(self.ctxt,

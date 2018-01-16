@@ -141,7 +141,7 @@ class VolumeDriverCore(base.CinderInterface):
         :returns: dict of appropriate values (see above).
         """
 
-    def create_volume(self, volume):
+    def create_volume(self, volume, context=None):
         """Create a new volume on the backend.
 
         This method is responsible only for storage allocation on the backend.
@@ -151,6 +151,7 @@ class VolumeDriverCore(base.CinderInterface):
         TODO(smcginnis): Add example data structure of volume object.
 
         :param volume: Volume object containing specifics to create.
+        :param context: Security/policy info for the request.
         :returns: (Optional) dict of database updates for the new volume.
         :raises VolumeBackendAPIException: if creation failed.
         """

@@ -44,7 +44,7 @@ class FakeLoggingVolumeDriver(lvm.LVMVolumeDriver):
         pass
 
     @utils.trace_method
-    def create_volume(self, volume):
+    def create_volume(self, volume, context=None):
         """Creates a volume."""
         super(FakeLoggingVolumeDriver, self).create_volume(volume)
         model_update = {}
