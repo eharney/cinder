@@ -684,8 +684,68 @@ class RBDDriver(driver.CloneableImageVD,
             return {'replication_status': fields.ReplicationStatus.DISABLED}
         return None
 
-    def create_volume(self, volume):
+    def _create_encrypted_volume(self, volume, context):
+        """Create an encrypted volume.
+
+        This works by creating an encrypted image locally,
+        and then uploading it to the volume.
+        """
+
+        # Check that this is a LUKS encryption provider
+        encryption = self.db.volume_encryption_metadata_get(context, volume.id)
+        provider = encryption.get('provider', None)
+        if provider in encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP:
+            provider = encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP[provider]
+        if provider != encryptors.LUKS:
+            message = _("Provider not supported.")
+            raise exception.VolumeDriverException(message=message)
+
+        # Fetch the key associated with the volume and decode the passphrase
+        keymgr = key_manager.API(CONF)
+        key = keymgr.get(context, encryption['encryption_key_id'])
+        passphrase = binascii.hexlify(key.get_encoded()).decode('utf-8')
+
+        # create a file
+        tmp_dir = self._image_conversion_dir()
+
+        with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_image:
+            with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_key:
+                with open(tmp_key.name, 'w') as f:
+                    f.write(passphrase)
+
+                cipher_args = image_utils.decode_cipher(
+                    encryption.get('cipher'),
+                    encryption.get('key_size'))
+
+                create_cmd = (
+                    'qemu-img', 'create', '-f', 'luks',
+                    '-o', 'cipher-alg=%(cipher_alg)s,'
+                    'cipher-mode=%(cipher_mode)s,'
+                    'ivgen-alg=%(ivgen_alg)s' % cipher_args,
+                    '--object', 'secret,id=luks_sec,'
+                    'format=raw,file=%(passfile)s' % {'passfile':
+                                                      tmp_key.name},
+                    '-o', 'key-secret=luks_sec',
+                    tmp_image.name,
+                    '%sM' % (volume.size * 1024))
+                self._execute(*create_cmd)
+
+            # Copy image into RBD
+            chunk_size = self.configuration.rbd_store_chunk_size * units.Mi
+            order = int(math.log(chunk_size, 2))
+
+            cmd = ['rbd', 'import',
+                   '--pool', self.configuration.rbd_pool,
+                   '--order', order,
+                   tmp_image.name, volume.name]
+            cmd.extend(self._ceph_args())
+            self._execute(*cmd)
+
+    def create_volume(self, volume, context=None):
         """Creates a logical volume."""
+
+        if volume.encryption_key_id:
+            return self._create_encrypted_volume(volume, context)
 
         size = int(volume.size) * units.Gi
 
