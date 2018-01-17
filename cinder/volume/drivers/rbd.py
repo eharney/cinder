@@ -741,11 +741,11 @@ class RBDDriver(driver.CloneableImageVD,
             cmd.extend(self._ceph_args())
             self._execute(*cmd)
 
-    def create_volume(self, volume, context=None):
+    def create_volume(self, volume):
         """Creates a logical volume."""
 
         if volume.encryption_key_id:
-            return self._create_encrypted_volume(volume, context)
+            return self._create_encrypted_volume(volume, volume.obj_context)
 
         size = int(volume.size) * units.Gi
 

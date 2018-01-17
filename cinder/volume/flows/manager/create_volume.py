@@ -909,7 +909,6 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                      "backup service to restore the volume with backup.",
                      {'id': backup_id})
             model_update = self._create_raw_volume(volume,
-                                                   context,
                                                    **kwargs) or {}
             model_update.update({'status': 'restoring-backup'})
             volume.update(model_update)
@@ -933,9 +932,9 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                   'backup_id': backup_id})
         return ret, need_update_volume
 
-    def _create_raw_volume(self, volume, context, **kwargs):
+    def _create_raw_volume(self, volume, **kwargs):
         try:
-            ret = self.driver.create_volume(volume, context=context)
+            ret = self.driver.create_volume(volume)
         finally:
             self._cleanup_cg_in_volume(volume)
         return ret
@@ -969,7 +968,6 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                   'create_type': create_type})
         if create_type == 'raw':
             model_update = self._create_raw_volume(volume,
-                                                   context,
                                                    **volume_spec)
         elif create_type == 'snap':
             model_update = self._create_from_snapshot(context, volume,
