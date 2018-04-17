@@ -419,7 +419,8 @@ class VolumeSnapshotNotFound(NotFound):
 
 
 class VolumeIsBusy(CinderException):
-    message = _("deleting volume %(volume_name)s that has snapshot")
+    message = _("failed to delete volume %(volume_name)s because a "
+                "snapshot exists on the backend.")
 
 
 class SnapshotIsBusy(CinderException):
