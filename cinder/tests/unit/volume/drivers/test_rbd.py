@@ -17,6 +17,7 @@
 import math
 import os
 import tempfile
+import uuid
 
 import castellan
 import ddt
@@ -26,6 +27,7 @@ from oslo_utils import imageutils
 from oslo_utils import units
 
 from cinder import context
+from cinder import db
 from cinder import exception
 import cinder.image.glance
 from cinder.image import image_utils
@@ -183,6 +185,7 @@ class RBDTestCase(test.TestCase):
         self.cfg.rbd_store_chunk_size = 4
         self.cfg.rados_connection_retries = 3
         self.cfg.rados_connection_interval = 5
+        self.cfg.backup_use_temp_snapshot = False
 
         mock_exec = mock.Mock()
         mock_exec.return_value = ('', '')
@@ -2179,6 +2182,29 @@ class RBDTestCase(test.TestCase):
                 'rbd', 'import', '--pool', 'rbd', '--order', 22,
                 '/imgfile', self.volume_c.name)
 
+    def test_get_backup_device_ceph(self):
+        pass
+
+    def _create_backup_db_entry(self, backupid, volid, size,
+                                userid=str(uuid.uuid4()),
+                                projectid=str(uuid.uuid4())):
+        backup = {'id': backupid, 'size': size, 'volume_id': volid,
+                  'user_id': userid, 'project_id': projectid}
+        return db.backup_create(self.context, backup)['id']
+
+    @mock.patch('cinder.db.volume_glance_metadata_get', return_value={})
+    @common_mocks
+    def test_get_backup_device_other(self, mock_gm_get):
+        driver = self.driver
+
+        self._create_backup_db_entry(fake.BACKUP_ID, fake.VOLUME_ID, 1)
+        backup = objects.Backup.get_by_id(self.context, fake.BACKUP_ID)
+        backup.service = 'asdf'
+
+        ret = driver.get_backup_device(self.context, backup)
+        self.assertEqual(ret, ('2', '3'))
+
+
 
 class ManagedRBDTestCase(test_driver.BaseDriverTestCase):
     driver_name = "cinder.volume.drivers.rbd.RBDDriver"
@@ -2412,3 +2438,5 @@ class ManagedRBDTestCase(test_driver.BaseDriverTestCase):
                                               image_meta)
             self.assertFalse(mock_clone.called)
             self.assertFalse(mock_resize.called)
+
+
