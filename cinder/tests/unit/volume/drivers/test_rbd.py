@@ -2150,8 +2150,27 @@ class RBDTestCase(test.TestCase):
                 'rbd', 'import', '--pool', 'rbd', '--order', 22,
                 '/imgfile', self.volume_c.name)
 
-    def test_get_backup_device_ceph(self):
-        pass
+    @mock.patch('cinder.objects.Volume.get_by_id')
+    @mock.patch('cinder.db.volume_glance_metadata_get', return_value={})
+    @common_mocks
+    def test_get_backup_device_ceph(self, mock_gm_get, volume_get_by_id):
+        # Use the same volume
+        volume_get_by_id.return_value = self.volume_a
+        driver = self.driver
+
+        #volume = objects.Volume(context=self.context,
+        #                        id=fake.VOLUME5_ID)
+        #volume.save()
+
+        self._create_backup_db_entry(fake.BACKUP_ID, self.volume_a['id'], 1)
+        backup = objects.Backup.get_by_id(self.context, fake.BACKUP_ID)
+        backup.service = 'asdf#ceph'
+
+        import pdb
+        pdb.set_trace()
+
+        ret = driver.get_backup_device(self.context, backup)
+        self.assertEqual(ret, ('2', '3'))
 
     def _create_backup_db_entry(self, backupid, volid, size,
                                 userid=str(uuid.uuid4()),
@@ -2160,12 +2179,26 @@ class RBDTestCase(test.TestCase):
                   'user_id': userid, 'project_id': projectid}
         return db.backup_create(self.context, backup)['id']
 
+    @mock.patch('cinder.volume.driver.BaseVD._get_backup_volume_temp_volume')
+    @mock.patch('cinder.objects.Volume.get_by_id')
     @mock.patch('cinder.db.volume_glance_metadata_get', return_value={})
     @common_mocks
-    def test_get_backup_device_other(self, mock_gm_get):
+    def test_get_backup_device_other(self, mock_gm_get, volume_get_by_id, mock_get_temp_volume):
+        self.volume_a.previous_status = 'in-use'
+        mock_get_temp_volume.return_value = self.volume_b
+
+        # Use a cloned volume
+        volume_get_by_id.return_value = self.volume_a
         driver = self.driver
 
-        self._create_backup_db_entry(fake.BACKUP_ID, fake.VOLUME_ID, 1)
+        #volume = objects.Volume(context=self.context,
+        #                        id=fake.VOLUME5_ID)
+        #volume.save()
+
+        import pdb
+        pdb.set_trace()
+
+        self._create_backup_db_entry(fake.BACKUP_ID, self.volume_a['id'], 1)
         backup = objects.Backup.get_by_id(self.context, fake.BACKUP_ID)
         backup.service = 'asdf'
 
