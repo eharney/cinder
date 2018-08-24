@@ -2701,9 +2701,14 @@ def volume_update_status_based_on_attachment(context, volume_id):
 
 
 def volume_has_snapshots_filter():
-    return sql.exists().where(
-        and_(models.Volume.id == models.Snapshot.volume_id,
-             ~models.Snapshot.deleted))
+    return sql.select(case(
+        [(
+        exists().where(
+            and_(models.Volume.id == models.Snapshot.volume_id,
+                 ~models.Snapshot.deleted)), 'yes')
+        ],
+        else_='no'
+    ))
 
 
 def volume_has_undeletable_snapshots_filter():
