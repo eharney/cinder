@@ -1205,6 +1205,39 @@ def _get_quota_usages(context, session, project_id, resources=None):
         query = query.filter(models.QuotaUsage.resource.in_(list(resources)))
     rows = query.order_by(models.QuotaUsage.id.asc()).\
         with_for_update().all()
+    qu_in_use = None
+    qu_reserved = None
+
+    for r in rows:
+        if r.resource == 'volumes':
+            LOG.debug("QuotaUsage: inuse: %(iu)s, res: %(res)s" %
+                      {'iu': r.in_use,
+                       'res': r.reserved})
+            qu_in_use = r.in_use
+            qu_reserved = r.reserved
+
+    LOG.debug("EMH in quota code, resources=%s" % resources)
+    LOG.debug("special quota stuff...")
+    query = model_query(context, models.Volume,
+                        session=session).filter_by(project_id=project_id)
+    LOG.debug("rows: %s" % rows)
+    myrow = None
+    vol_in_use = None
+    vol_reserved = None
+    for r in rows:
+        LOG.debug("resource: %s" % r.resource)
+        if r.resource == 'volumes':
+            myrow = r
+            vol_in_use = r.in_use
+            vol_reserved = r.reserved
+    LOG.debug("vol row: %s" % myrow)
+    LOG.debug("vol in-use: %(inuse)s, reserved: %(res)s" %
+              {'inuse': myrow.in_use,
+               'res': myrow.reserved})
+ 
+    # compare what we got here to the above QuotaUsage count
+    if qu_in_use != vol_in_use:
+        LOG.error("vol in_use mismatch problem")
 
     return {row.resource: row for row in rows}
 
@@ -1229,6 +1262,43 @@ def quota_usage_update_resource(context, old_res, new_res):
         for usage in usages:
             usage.resource = new_res
             usage.until_refresh = 1
+
+
+@require_context
+@oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+def quota_repair(context, resources, project_id):
+    res = set(resources).union(set(['volumes', 'gigabytes']))
+    LOG.debug("repairing for %s" % res)
+
+    elevated = context.elevated()
+
+
+    # First, detect whether counts are off.
+    for r in res:
+        if r == 'volumes':
+            quota_desynchronized = False
+
+            query = model_query(context, func.count(models.Volume.id), read_deleted="no").filter_by(project_id=project_id)
+            count = query.first()[0]
+            LOG.debug("EMH current volume count: %s" % count)
+
+            quota_usage = quota_usage_get(context, project_id, r)
+
+            if count != quota_usage.in_use:
+                LOG.error("mismatch detected, count=%(count)s qu=%(qu)s" %
+                          {'count': count,
+                           'qu': quota_usage.in_use})
+                quota_desynchronized = True
+
+            if quota_desynchronized:
+                # Set quota_usage table to match volume count
+                #query = model_query(context, models.QuotaUsage).filter_by(project_id=project_id).filter_by(...type...).update()
+                pass
+
+
+    session = get_session()
+    #with session.begin():
+
 
 
 @require_context

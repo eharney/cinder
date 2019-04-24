@@ -378,6 +378,12 @@ class DbQuotaDriver(object):
         if project_id is None:
             project_id = context.project_id
 
+
+        # Repair miscounts that occured due to thinking like in the comment
+        # below.
+        if 'volumes' in resources or 'gigabytes' in resources:
+            self._quota_repair(context, resources, project_id)
+
         # Get the applicable quotas.
         # NOTE(Vek): We're not worried about races at this point.
         #            Yes, the admin may be in the process of reducing
@@ -396,6 +402,9 @@ class DbQuotaDriver(object):
         return db.quota_reserve(context, resources, quotas, deltas, expire,
                                 CONF.until_refresh, CONF.max_age,
                                 project_id=project_id)
+
+    def _quota_repair(self, context, resources, project_id):
+        return db.quota_repair(context, resources, project_id)
 
     def commit(self, context, reservations, project_id=None):
         """Commit reservations.

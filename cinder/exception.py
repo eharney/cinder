@@ -533,6 +533,9 @@ class InvalidNestedQuotaSetup(CinderException):
 class QuotaNotFound(NotFound):
     message = _("Quota could not be found")
 
+class QuotaDesynchronized(QuotaNotFound):
+    message = _("Quota desynchronized")
+
 
 class QuotaResourceUnknown(QuotaNotFound):
     message = _("Unknown quota resources %(unknown)s.")

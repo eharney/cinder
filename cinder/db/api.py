@@ -1092,6 +1092,9 @@ def quota_destroy(context, project_id, resource):
     """Destroy the quota or raise if it does not exist."""
     return IMPL.quota_destroy(context, project_id, resource)
 
+def quota_repair(context, project_id, resource):
+    return IMPL.quota_repair(context, project_id, resource)
+
 
 ###################
 

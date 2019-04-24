@@ -298,6 +298,7 @@ class DbCommands(object):
         try:
             result = db_migration.db_sync(version)
         except db_exc.DBMigrationError as ex:
+            LOG.exception("Error during database migration.")
             print("Error during database migration: %s" % ex)
             sys.exit(1)
 
