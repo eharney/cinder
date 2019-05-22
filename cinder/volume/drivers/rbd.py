@@ -1979,3 +1979,13 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
 
         volume = objects.Volume.get_by_id(context, backup.volume_id)
         return (volume, False)
+
+    def rekey_volume(self, context, volume):
+        raise 'TODO'
+
+        # fail if snaps present
+        # 
+
+        # Will have to do a "qemu-img convert" to a new rbd image, i think.
+
+        # Alternatively: use rbd-nbd and then use cryptsetup tools.  (Should be much faster.)

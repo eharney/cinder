@@ -902,6 +902,38 @@ class BaseVD(object):
             self._detach_volume(context, attach_info, volume, properties,
                                 force=True, ignore_errors=True)
 
+    def rekey_volume(self, context, volume):
+        """Change the encryption key used for the volume.
+
+        Assumes that :volume: is encrypted.
+        """
+
+        # TODO: fail if snaps present
+
+        LOG.debug('rekey volume %s', volume.name)
+
+        properties = utils.brick_get_connector_properties(False, False)
+
+        try:
+            attach_info, volume = self._attach_volume(context, volume, properties)
+
+            LOG.debug('attach_info: %s', attach_info)
+
+            self._execute('qemu-img', 'info', attach_info.device, run_as_root=True)
+
+            # run some command to add new key
+
+            # check that new key works
+
+            # delete old key
+
+            # or, just call "cryptsetup luksChangeKey"
+
+        finally:
+            self._detach_volume(context, attach_info, volume, properties, force=True)
+
+
+
     def before_volume_copy(self, context, src_vol, dest_vol, remote=None):
         """Driver-specific actions before copyvolume data.
 

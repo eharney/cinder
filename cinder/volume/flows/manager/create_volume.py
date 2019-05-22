@@ -481,6 +481,7 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
         srcvol_ref = objects.Volume.get_by_id(context, source_volid)
         try:
             model_update = self.driver.create_cloned_volume(volume, srcvol_ref)
+            self.driver.rekey_volume(context, volume)
         finally:
             self._cleanup_cg_in_volume(volume)
         # NOTE(harlowja): Subtasks would be useful here since after this
