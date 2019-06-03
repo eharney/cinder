@@ -1236,3 +1236,25 @@ def create_ordereddict(adict):
     """Given a dict, return a sorted OrderedDict."""
     return OrderedDict(sorted(adict.items(),
                               key=operator.itemgetter(0)))
+
+def check_encryption_provider(db, volume, context):
+    """Check that this is a LUKS encryption provider.
+
+    :returns: encryption dict
+    """
+
+    encryption = db.volume_encryption_metadata_get(context, volume.id)
+    provider = encryption['provider']
+    if provider in encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP:
+        provider = encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP[provider]
+    if provider != encryptors.LUKS:
+        message = _("Provider %s not supported.") % provider
+        raise exception.VolumeDriverException(message=message)
+
+    if 'cipher' not in encryption or 'key_size' not in encryption:
+        msg = _('encryption spec must contain "cipher" and '
+                '"key_size"')
+        raise exception.VolumeDriverException(message=msg)
+
+    return encryption
+

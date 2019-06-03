@@ -933,7 +933,6 @@ class BaseVD(object):
             self._detach_volume(context, attach_info, volume, properties, force=True)
 
 
-
     def before_volume_copy(self, context, src_vol, dest_vol, remote=None):
         """Driver-specific actions before copyvolume data.
 

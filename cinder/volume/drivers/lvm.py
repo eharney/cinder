@@ -861,6 +861,10 @@ class LVMVolumeDriver(driver.VolumeDriver):
         self.target_driver.terminate_connection(volume, connector, **kwargs)
         return len(attachments) > 1
 
-    def rekey_volume(context, volume):
+    def rekey_volume(self, context, volume):
         # call "cryptsetup luksChangeKey"
+
+        if volume.encryption_key_id is not None:
+            LOG.debug('volume is encrypted')
+
         pass

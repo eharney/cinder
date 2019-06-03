@@ -10,8 +10,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import binascii
+import tempfile
 import traceback
 
+from castellan import key_manager
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_utils import excutils
@@ -470,6 +473,80 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                                                      snapshot_id=snapshot_id)
         return model_update
 
+    def _rekey_volume(self, context, volume):
+        # Note: be sure to handle case where souce volume is still empty
+        # because it was never written to.
+
+        LOG.debug('rekey volume %s', volume.name)
+
+        properties = utils.brick_get_connector_properties(False, False)
+        LOG.debug("properties: %s", properties)
+        attach_info = None
+
+        try:
+            LOG.debug("attempting attach for rekey")
+
+            attach_info, volume = self.driver._attach_volume(context, volume, properties)
+
+            LOG.debug('attach_info: %s', attach_info)
+
+            (out, err) = utils.execute('qemu-img', 'info', attach_info['device']['path'], run_as_root=True)
+            LOG.debug('out: %s', out)
+
+            image_info = image_utils.qemu_img_info(attach_info['device']['path'])
+
+            LOG.debug("encrypted?: %s" % image_info.encrypted)
+
+            encryption = volume_utils.check_encryption_provider(self.db, volume, context)
+            keymgr = key_manager.API(CONF)
+            key = keymgr.get(context, encryption['encryption_key_id'])
+            source_passphrase = binascii.hexlify(key.get_encoded()).decode('utf-8')
+            del key
+
+            new_key_id = volume_utils.create_encryption_key(context, keymgr, volume.volume_type_id)
+            new_key = keymgr.get(context, encryption['encryption_key_id'])
+            new_passphrase = binascii.hexlify(new_key.get_encoded()).decode('utf-8')
+
+
+            tmp_dir = volume_utils.image_conversion_dir()
+            if image_info.encrypted == 'yes':
+                # luksChangeKey
+                with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_key:
+                    with open(tmp_key.name, 'w') as f:
+                        f.write(source_passphrase)
+
+                    with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_new_key:
+                        with open(tmp_new_key.name, 'w') as f:
+                            f.write(new_passphrase)
+
+                        (out, err) = utils.execute('cryptsetup',
+                                       'luksChangeKey',
+                                       '--key-file',
+                                       tmp_key.name,
+                                       attach_info['device']['path'],
+                                       tmp_new_key.name,
+                                       run_as_root=True)
+                        LOG.debug(out)
+                        LOG.debug(err)
+                
+            else:
+                # stamp luks
+                pass
+
+
+            # run some command to add new key
+
+            # check that new key works
+
+            # delete old key
+
+            # or, just call "cryptsetup luksChangeKey"
+
+        finally:
+            if attach_info:
+                self.driver._detach_volume(context, attach_info, volume, properties, force=True)
+
+
     def _create_from_source_volume(self, context, volume, source_volid,
                                    **kwargs):
         # NOTE(harlowja): if the source volume has disappeared this will be our
@@ -481,7 +558,7 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
         srcvol_ref = objects.Volume.get_by_id(context, source_volid)
         try:
             model_update = self.driver.create_cloned_volume(volume, srcvol_ref)
-            self.driver.rekey_volume(context, volume)
+            self._rekey_volume(context, volume)
         finally:
             self._cleanup_cg_in_volume(volume)
         # NOTE(harlowja): Subtasks would be useful here since after this

@@ -809,27 +809,6 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
 
         return update
 
-    def _check_encryption_provider(self, volume, context):
-        """Check that this is a LUKS encryption provider.
-
-        :returns: encryption dict
-        """
-
-        encryption = self.db.volume_encryption_metadata_get(context, volume.id)
-        provider = encryption['provider']
-        if provider in encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP:
-            provider = encryptors.LEGACY_PROVIDER_CLASS_TO_FORMAT_MAP[provider]
-        if provider != encryptors.LUKS:
-            message = _("Provider %s not supported.") % provider
-            raise exception.VolumeDriverException(message=message)
-
-        if 'cipher' not in encryption or 'key_size' not in encryption:
-            msg = _('encryption spec must contain "cipher" and '
-                    '"key_size"')
-            raise exception.VolumeDriverException(message=msg)
-
-        return encryption
-
     def _create_encrypted_volume(self, volume, context):
         """Create an encrypted volume.
 
@@ -837,7 +816,7 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         and then uploading it to the volume.
         """
 
-        encryption = self._check_encryption_provider(volume, context)
+        encryption = volume_utils.check_encryption_provider(self.db, volume, context)
 
         # Fetch the key associated with the volume and decode the passphrase
         keymgr = key_manager.API(CONF)
@@ -1500,16 +1479,6 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
                     return volume_update, True
         return ({}, False)
 
-    def _image_conversion_dir(self):
-        tmpdir = (CONF.image_conversion_dir or
-                  tempfile.gettempdir())
-
-        # ensure temporary directory exists
-        if not os.path.exists(tmpdir):
-            os.makedirs(tmpdir)
-
-        return tmpdir
-
     def copy_image_to_encrypted_volume(self, context, volume, image_service,
                                        image_id):
         self._copy_image_to_volume(context, volume, image_service, image_id,
@@ -1519,7 +1488,7 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         self._copy_image_to_volume(context, volume, image_service, image_id)
 
     def _encrypt_image(self, context, volume, tmp_dir, src_image_path):
-        encryption = self._check_encryption_provider(volume, context)
+        encryption = volume_utils.check_encryption_provider(self.db, volume, context)
 
         # Fetch the key associated with the volume and decode the passphrase
         keymgr = key_manager.API(CONF)
@@ -1530,7 +1499,7 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         cipher_spec = image_utils.decode_cipher(encryption['cipher'],
                                                 encryption['key_size'])
 
-        tmp_dir = self._image_conversion_dir()
+        tmp_dir = volume_utils.image_conversion_dir()
 
         with tempfile.NamedTemporaryFile(prefix='luks_',
                                          dir=tmp_dir) as pass_file:
