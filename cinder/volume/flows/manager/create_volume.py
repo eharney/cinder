@@ -474,7 +474,11 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
         return model_update
 
     def _rekey_volume(self, context, volume):
-        # Note: be sure to handle case where souce volume is still empty
+        """Change encryption key on volume.
+
+        :returns: model update dict
+        """
+        # Note: be sure to handle case where source volume is still empty
         # because it was never written to.
 
         LOG.debug('rekey volume %s', volume.name)
@@ -506,6 +510,7 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
             new_key_id = volume_utils.create_encryption_key(context, keymgr, volume.volume_type_id)
             new_key = keymgr.get(context, encryption['encryption_key_id'])
             new_passphrase = binascii.hexlify(new_key.get_encoded()).decode('utf-8')
+            del new_key
 
 
             tmp_dir = volume_utils.image_conversion_dir()
@@ -514,10 +519,12 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                 with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_key:
                     with open(tmp_key.name, 'w') as f:
                         f.write(source_passphrase)
+                        del source_passphrase
 
                     with tempfile.NamedTemporaryFile(dir=tmp_dir) as tmp_new_key:
                         with open(tmp_new_key.name, 'w') as f:
                             f.write(new_passphrase)
+                            del new_passphrase
 
                         (out, err) = utils.execute('cryptsetup',
                                        'luksChangeKey',
@@ -528,9 +535,10 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
                                        run_as_root=True)
                         LOG.debug(out)
                         LOG.debug(err)
+                model_update = {'encryption_key_id': new_key_id}
                 
             else:
-                # stamp luks
+                # stamp luks because volume hasn't been written to yet
                 pass
 
 
@@ -546,6 +554,8 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
             if attach_info:
                 self.driver._detach_volume(context, attach_info, volume, properties, force=True)
 
+        return model_update
+
 
     def _create_from_source_volume(self, context, volume, source_volid,
                                    **kwargs):
@@ -558,7 +568,11 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
         srcvol_ref = objects.Volume.get_by_id(context, source_volid)
         try:
             model_update = self.driver.create_cloned_volume(volume, srcvol_ref)
-            self._rekey_volume(context, volume)
+            # TODO: may need to apply model_update to volume here?
+            if model_update is None:
+                model_update = {}
+            rekey_model_update = self._rekey_volume(context, volume)
+            model_update.update(rekey_model_update)
         finally:
             self._cleanup_cg_in_volume(volume)
         # NOTE(harlowja): Subtasks would be useful here since after this
