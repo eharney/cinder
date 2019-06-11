@@ -12,9 +12,12 @@
 
 import mock
 from oslo_concurrency import processutils as putils
+import six
 
 from cinder import context
 from cinder import exception
+from cinder.tests import fixtures
+import cinder.privileged
 from cinder.tests.unit.targets import targets_fixture as tf
 from cinder import utils
 from cinder.volume.targets import lio
@@ -25,20 +28,25 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
     def setUp(self):
         super(TestLioAdmDriver, self).setUp()
 
+        self.useFixture(fixtures.PrivsepFixture())
+
         with mock.patch.object(lio.LioAdm, '_verify_rtstool'):
             self.target = lio.LioAdm(root_helper=utils.get_root_helper(),
                                      configuration=self.configuration)
 
+
+    @mock.patch('cinder.privileged.target_lio.get_targets')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
-    def test_get_target(self, mexecute, mpersist_cfg, mlock_exec):
+    def test_get_target(self, mexecute, mpersist_cfg, mlock_exec, mock_get_targets):
+        mock_get_targets.return_value = (self.test_vol, None)
         mexecute.return_value = (self.test_vol, None)
         self.assertEqual(self.test_vol, self.target._get_target(self.test_vol))
         self.assertFalse(mpersist_cfg.called)
         expected_args = ('cinder-rtstool', 'get-targets')
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
-        mexecute.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mexecute.assert_called_once_with(*expected_args, run_as_root=True)
 
     def test_get_iscsi_target(self):
         ctxt = context.get_admin_context()
@@ -170,10 +178,11 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
         mexecute.assert_called_once_with(*expected_args, run_as_root=True)
 
+    @mock.patch('cinder.privileged.target_lio.delete')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
-    def test_remove_iscsi_target(self, mexecute, mpersist_cfg, mlock_exec):
+    def test_remove_iscsi_target(self, mexecute, mpersist_cfg, mlock_exec, mock_delete):
         # Test the normal case
         self.target.remove_iscsi_target(0,
                                         0,
@@ -182,13 +191,16 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         expected_args = ('cinder-rtstool', 'delete',
                          self.iscsi_target_prefix + self.testvol['name'])
 
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
-        mexecute.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mexecute.assert_called_once_with(*expected_args, run_as_root=True)
         mpersist_cfg.assert_called_once_with(self.fake_volume_id)
+        mock_delete.assert_called_once_with(self.iscsi_target_prefix + self.testvol['name'])
 
         # Test the failure case: putils.ProcessExecutionError
         mlock_exec.reset_mock()
         mpersist_cfg.reset_mock()
+        mock_delete.reset_mock()
+        mock_delete.side_effect = Exception
         mexecute.side_effect = putils.ProcessExecutionError
         self.assertRaises(exception.ISCSITargetRemoveFailed,
                           self.target.remove_iscsi_target,
@@ -196,7 +208,8 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
                           0,
                           self.testvol['id'],
                           self.testvol['name'])
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        mock_delete.assert_called_once_with(self.iscsi_target_prefix + self.testvol['name'])
 
         # Ensure there have been no calls to persist configuration
         self.assertFalse(mpersist_cfg.called)
@@ -226,12 +239,13 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
                                   self.fake_volumes_dir)
         self.assertFalse(mock_restore.called)
 
+    @mock.patch('cinder.privileged.target_lio.add_initiator')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
     @mock.patch.object(lio.LioAdm, '_get_iscsi_properties')
     def test_initialize_connection(self, mock_get_iscsi, mock_execute,
-                                   mpersist_cfg, mlock_exec):
+                                   mpersist_cfg, mlock_exec, mock_add_initiator):
         target_id = self.iscsi_target_prefix + 'volume-' + self.fake_volume_id
         connector = {'initiator': 'fake_init'}
 
@@ -247,41 +261,54 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
                          self.expected_iscsi_properties['auth_username'],
                          '2FE0CQ8J196R', connector['initiator'])
 
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
-        mock_execute.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mock_execute.assert_called_once_with(*expected_args, run_as_root=True)
         mpersist_cfg.assert_called_once_with(self.fake_volume_id)
+        mock_add_initiator.assert_called_once_with(target_id,
+                                                   connector['initiator'],
+                                                   self.expected_iscsi_properties['auth_username'],
+                                                   '2FE0CQ8J196R')
 
         # Test the failure case: putils.ProcessExecutionError
         mlock_exec.reset_mock()
         mpersist_cfg.reset_mock()
+        mock_add_initiator.reset_mock()
+        mock_add_initiator.side_effect = Exception
         mock_execute.side_effect = putils.ProcessExecutionError
         self.assertRaises(exception.ISCSITargetAttachFailed,
                           self.target.initialize_connection,
                           self.testvol,
                           connector)
 
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        mock_add_initiator.assert_called_once_with(target_id,
+                                                   connector['initiator'],
+                                                   self.expected_iscsi_properties['auth_username'],
+                                                   '2FE0CQ8J196R')
 
         # Ensure there have been no calls to persist configuration
         self.assertFalse(mpersist_cfg.called)
 
+    @mock.patch('cinder.privileged.target_lio.delete_initiator')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
     def test_terminate_connection(self, mock_execute, mpersist_cfg,
-                                  mlock_exec):
+                                  mlock_exec, mock_target_lio):
+        # TODO: rewrite these tests to work this way-- test calls to target_lio
+        # Then we need other tests for inside of target_lio
 
         target_id = self.iscsi_target_prefix + 'volume-' + self.fake_volume_id
 
         connector = {'initiator': 'fake_init'}
         self.target.terminate_connection(self.testvol,
                                          connector)
-        expected_args = ('cinder-rtstool', 'delete-initiator', target_id,
-                         connector['initiator'])
+        expected_args = (target_id, connector['initiator'])
 
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
-        mock_execute.assert_called_once_with(*expected_args, run_as_root=True)
+        #mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
+        #mock_execute.assert_called_once_with(*expected_args, run_as_root=True)
         mpersist_cfg.assert_called_once_with(self.fake_volume_id)
+        mock_target_lio.assert_called_once_with(*expected_args)
 
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
@@ -300,11 +327,12 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         mock_execute.assert_not_called()
         mpersist_cfg.assert_not_called()
 
+    @mock.patch('cinder.privileged.target_lio.delete_initiator', side_effect=Exception)
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
     def test_terminate_connection_fail(self, mock_execute, mpersist_cfg,
-                                       mlock_exec):
+                                       mlock_exec, mock_target_lio_di):
 
         target_id = self.iscsi_target_prefix + 'volume-' + self.fake_volume_id
         mock_execute.side_effect = putils.ProcessExecutionError
@@ -313,10 +341,12 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
                           self.target.terminate_connection,
                           self.testvol,
                           connector)
-        mlock_exec.assert_called_once_with('cinder-rtstool',
-                                           'delete-initiator', target_id,
-                                           connector['initiator'],
-                                           run_as_root=True)
+        #mlock_exec.assert_called_once_with('cinder-rtstool',
+        #                                   'delete-initiator', target_id,
+        #                                   connector['initiator'],
+        #                                   run_as_root=True)
+        mock_target_lio_di.assert_called_once_with(target_id,
+                                                   connector['initiator'])
         self.assertFalse(mpersist_cfg.called)
 
     def test_iscsi_protocol(self):
@@ -352,3 +382,112 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
             (mock.sentinel.user, mock.sentinel.pwd),
             portals_ips=[self.configuration.target_ip_address],
             portals_port=self.configuration.target_port)
+
+    def _test_create_rtslib_error_network_portal(self, ip):
+        with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
+                mock.patch.object(rtslib_fb, 'LUN') as lun, \
+                mock.patch.object(rtslib_fb, 'TPG') as tpg, \
+                mock.patch.object(rtslib_fb, 'FabricModule') as fabric_module, \
+                mock.patch.object(rtslib_fb, 'Target') as target, \
+                mock.patch.object(rtslib_fb, 'BlockStorageObject') as \
+                block_storage_object, \
+                mock.patch.object(rtslib_fb.root, 'RTSRoot') as rts_root:
+            root_new = mock.MagicMock(storage_objects=mock.MagicMock())
+            rts_root.return_value = root_new
+            block_storage_object.return_value = mock.sentinel.so_new
+            target.return_value = mock.sentinel.target_new
+            fabric_module.return_value = mock.sentinel.fabric_new
+            tpg_new = tpg.return_value
+            lun.return_value = mock.sentinel.lun_new
+
+            if ip == '0.0.0.0':
+                network_portal.side_effect = rtslib_fb.utils.RTSLibError()
+                self.assertRaises(exception.LIOTargetError,
+                                  target_lio.create,
+                                  mock.sentinel.backing_device,
+                                  mock.sentinel.name,
+                                  mock.sentinel.userid,
+                                  mock.sentinel.password,
+                                  mock.sentinel.iser_enabled)
+            else:
+                target_lio.create(mock.sentinel.backing_device,
+                                  mock.sentinel.name,
+                                  mock.sentinel.userid,
+                                  mock.sentinel.password,
+                                  mock.sentinel.iser_enabled)
+
+            rts_root.assert_called_once_with()
+            block_storage_object.assert_called_once_with(
+                name=mock.sentinel.name, dev=mock.sentinel.backing_device)
+            target.assert_called_once_with(mock.sentinel.fabric_new,
+                                           mock.sentinel.name, 'create')
+            fabric_module.assert_called_once_with('iscsi')
+            tpg.assert_called_once_with(mock.sentinel.target_new,
+                                        mode='create')
+            tpg_new.set_attribute.assert_called_once_with('authentication',
+                                                          '1')
+            lun.assert_called_once_with(tpg_new,
+                                        storage_object=mock.sentinel.so_new)
+            self.assertEqual(1, tpg_new.enable)
+
+            if ip == '::0':
+                ip = '[::0]'
+
+            network_portal.assert_any_call(tpg_new, ip, 3260, mode='any')
+
+    def test_create_rtslib_error_network_portal_ipv4(self):
+        with mock.patch('sys.stdout', new=six.StringIO()):
+            self._test_create_rtslib_error_network_portal('0.0.0.0')
+
+    def test_create_rtslib_error_network_portal_ipv6(self):
+        with mock.patch('sys.stdout', new=six.StringIO()):
+            self._test_create_rtslib_error_network_portal('::0')
+
+    def _test_create(self, ip):
+        with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
+                mock.patch.object(rtslib_fb, 'LUN') as lun, \
+                mock.patch.object(rtslib_fb, 'TPG') as tpg, \
+                mock.patch.object(rtslib_fb, 'FabricModule') as fabric_module, \
+                mock.patch.object(rtslib_fb, 'Target') as target, \
+                mock.patch.object(rtslib_fb, 'BlockStorageObject') as \
+                block_storage_object, \
+                mock.patch.object(rtslib_fb.root, 'RTSRoot') as rts_root:
+            root_new = mock.MagicMock(storage_objects=mock.MagicMock())
+            rts_root.return_value = root_new
+            block_storage_object.return_value = mock.sentinel.so_new
+            target.return_value = mock.sentinel.target_new
+            fabric_module.return_value = mock.sentinel.fabric_new
+            tpg_new = tpg.return_value
+            lun.return_value = mock.sentinel.lun_new
+
+            cinder_rtstool.create(mock.sentinel.backing_device,
+                                  mock.sentinel.name,
+                                  mock.sentinel.userid,
+                                  mock.sentinel.password,
+                                  mock.sentinel.iser_enabled)
+
+            rts_root.assert_called_once_with()
+            block_storage_object.assert_called_once_with(
+                name=mock.sentinel.name, dev=mock.sentinel.backing_device)
+            target.assert_called_once_with(mock.sentinel.fabric_new,
+                                           mock.sentinel.name, 'create')
+            fabric_module.assert_called_once_with('iscsi')
+            tpg.assert_called_once_with(mock.sentinel.target_new,
+                                        mode='create')
+            tpg_new.set_attribute.assert_called_once_with('authentication',
+                                                          '1')
+            lun.assert_called_once_with(tpg_new,
+                                        storage_object=mock.sentinel.so_new)
+            self.assertEqual(1, tpg_new.enable)
+
+            if ip == '::0':
+                ip = '[::0]'
+
+            network_portal.assert_any_call(tpg_new, ip, 3260, mode='any')
+
+    def test_create_ipv4(self):
+        self._test_create('0.0.0.0')
+
+    def test_create_ipv6(self):
+        self._test_create('::0')
+

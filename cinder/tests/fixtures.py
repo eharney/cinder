@@ -25,6 +25,8 @@ import warnings
 import fixtures
 from oslo_privsep import daemon as privsep_daemon
 
+import cinder.privsep
+
 _TRUE_VALUES = ('True', 'true', '1', 'yes')
 
 
@@ -160,3 +162,15 @@ class PrivsepNoHelperFixture(fixtures.Fixture):
         self.useFixture(fixtures.MonkeyPatch(
             'oslo_privsep.daemon.RootwrapClientChannel',
             UnHelperfulClientChannel))
+
+
+class PrivsepFixture(fixtures.Fixture):
+    """Disable real privsep checking so we can test the guts of methods
+    decorated with sys_admin_pctxt.
+    """
+
+    def setUp(self):
+        super(PrivsepFixture, self).setUp()
+
+        self.useFixture(fixtures.MockPatchObject(
+            cinder.privsep.sys_admin_pctxt, 'client_mode', False))
