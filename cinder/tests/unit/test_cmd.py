@@ -1186,7 +1186,6 @@ class TestCinderRtstoolCmd(test.TestCase):
         self.TARGET_IQN = 'iqn.2015.12.com.example.openstack.i:TARGET1'
 
 
-    """
     def _test_create_rtslib_error_network_portal(self, ip):
         with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
                 mock.patch.object(rtslib_fb, 'LUN') as lun, \
@@ -1246,9 +1245,7 @@ class TestCinderRtstoolCmd(test.TestCase):
     def test_create_rtslib_error_network_portal_ipv6(self):
         with mock.patch('sys.stdout', new=six.StringIO()):
             self._test_create_rtslib_error_network_portal('::0')
-    """
 
-    """
     def _test_create(self, ip):
         with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
                 mock.patch.object(rtslib_fb, 'LUN') as lun, \
@@ -1296,7 +1293,6 @@ class TestCinderRtstoolCmd(test.TestCase):
 
     def test_create_ipv6(self):
         self._test_create('::0')
-    """
 
     def _test_create_ips_and_port(self, mock_rtslib, port, ips, expected_ips):
         mock_rtslib.BlockStorageObject.return_value = mock.sentinel.bso

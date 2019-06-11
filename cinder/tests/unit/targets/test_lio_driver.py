@@ -63,12 +63,13 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         self.assertEqual(expected,
                          self.target._get_target_and_lun(ctxt, self.testvol))
 
+    @mock.patch('cinder.privileged.target_lio.create')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute')
     @mock.patch.object(lio.LioAdm, '_get_target')
     def test_create_iscsi_target(self, mget_target, mexecute, mpersist_cfg,
-                                 mlock_exec):
+                                 mlock_exec, mock_create):
 
         mget_target.return_value = 1
         # create_iscsi_target sends volume_name instead of volume_id on error
@@ -80,32 +81,40 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
                 0,
                 self.fake_volumes_dir))
         mpersist_cfg.assert_called_once_with(self.VOLUME_NAME)
-        mexecute.assert_called_once_with(
-            'cinder-rtstool',
-            'create',
-            self.fake_volumes_dir,
-            self.test_vol,
-            '',
-            '',
-            self.target.iscsi_protocol == 'iser',
-            run_as_root=True)
+        #mexecute.assert_called_once_with(
+        #    'cinder-rtstool',
+        #    'create',
+        #    self.fake_volumes_dir,
+        #    self.test_vol,
+        #    '',
+        #    '',
+        #    self.target.iscsi_protocol == 'iser',
+        #    run_as_root=True)
+        mock_create.assert_called_once_with(self.fake_volumes_dir,
+                                            self.iscsi_target_prefix + self.VOLUME_NAME,
+                                            '',
+                                            '',
+                                            False,
+                                            portals_ips=None,
+                                            portals_port=None)
 
+    @mock.patch('cinder.privileged.target_lio.create')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch.object(utils, 'execute')
     @mock.patch.object(lio.LioAdm, '_get_target', return_value=1)
     def test_create_iscsi_target_port_ip(self, mget_target, mexecute,
-                                         mpersist_cfg, mlock_exec):
+                                         mpersist_cfg, mlock_exec, mock_create):
         ip = '10.0.0.15'
         port = 3261
 
         self.assertEqual(
             1,
             self.target.create_iscsi_target(
-                name=self.test_vol,
-                tid=1,
-                lun=0,
-                path=self.fake_volumes_dir,
+                self.test_vol,
+                1,
+                0,
+                self.fake_volumes_dir,
                 **{'portals_port': port, 'portals_ips': [ip]}))
 
         expected_args = (
@@ -119,16 +128,23 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
             '-p%s' % port,
             '-a' + ip)
 
-        mlock_exec.assert_any_call(*expected_args, run_as_root=True)
-        mexecute.assert_any_call(*expected_args, run_as_root=True)
+        mock_create.assert_called_once_with(self.fake_volumes_dir,
+                                            self.iscsi_target_prefix + self.VOLUME_NAME,
+                                            '',
+                                            '',
+                                            False,
+                                            portals_ips=['10.0.0.15'],
+                                            portals_port=3261)
+
         mpersist_cfg.assert_called_once_with(self.VOLUME_NAME)
 
+    @mock.patch('cinder.privileged.target_lio.create')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch.object(utils, 'execute')
     @mock.patch.object(lio.LioAdm, '_get_target', return_value=1)
     def test_create_iscsi_target_port_ips(self, mget_target, mexecute,
-                                          mpersist_cfg, mlock_exec):
+                                          mpersist_cfg, mlock_exec, mock_create):
         test_vol = 'iqn.2010-10.org.openstack:' + self.VOLUME_NAME
         ips = ['10.0.0.15', '127.0.0.1']
         port = 3261
@@ -136,10 +152,10 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         self.assertEqual(
             1,
             self.target.create_iscsi_target(
-                name=test_vol,
-                tid=1,
-                lun=0,
-                path=self.fake_volumes_dir,
+                test_vol,
+                1,
+                0,
+                self.fake_volumes_dir,
                 **{'portals_port': port, 'portals_ips': ips}))
 
         expected_args = (
@@ -153,17 +169,25 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
             '-p%s' % port,
             '-a' + ','.join(ips))
 
-        mlock_exec.assert_any_call(*expected_args, run_as_root=True)
-        mexecute.assert_any_call(*expected_args, run_as_root=True)
+        #mlock_exec.assert_any_call(*expected_args, run_as_root=True)
+        #mexecute.assert_any_call(*expected_args, run_as_root=True)
+        mock_create.assert_called_once_with(self.fake_volumes_dir,
+                                            self.iscsi_target_prefix + self.VOLUME_NAME,
+                                            '',
+                                            '',
+                                            False,
+                                            portals_ips=['10.0.0.15', '127.0.0.1'],
+                                            portals_port=3261)
         mpersist_cfg.assert_called_once_with(self.VOLUME_NAME)
 
+    @mock.patch('cinder.privileged.target_lio.create', side_effect=Exception)
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
     @mock.patch.object(lio.LioAdm, '_persist_configuration')
     @mock.patch('cinder.utils.execute',
                 side_effect=putils.ProcessExecutionError)
     @mock.patch.object(lio.LioAdm, '_get_target')
     def test_create_iscsi_target_already_exists(self, mget_target, mexecute,
-                                                mpersist_cfg, mlock_exec):
+                                                mpersist_cfg, mlock_exec, mock_create):
         chap_auth = ('foo', 'bar')
         self.assertRaises(exception.ISCSITargetCreateFailed,
                           self.target.create_iscsi_target,
@@ -175,8 +199,12 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
         self.assertFalse(mpersist_cfg.called)
         expected_args = ('cinder-rtstool', 'create', self.fake_volumes_dir,
                          self.test_vol, chap_auth[0], chap_auth[1], False)
-        mlock_exec.assert_called_once_with(*expected_args, run_as_root=True)
-        mexecute.assert_called_once_with(*expected_args, run_as_root=True)
+        mock_create.assert_called_once_with(self.fake_volumes_dir,
+                                            self.iscsi_target_prefix + self.VOLUME_NAME,
+                                            chap_auth[0], chap_auth[1],
+                                            False,
+                                            portals_ips=None,
+                                            portals_port=None)
 
     @mock.patch('cinder.privileged.target_lio.delete')
     @mock.patch.object(lio.LioAdm, '_execute', side_effect=lio.LioAdm._execute)
@@ -382,112 +410,4 @@ class TestLioAdmDriver(tf.TargetDriverFixture):
             (mock.sentinel.user, mock.sentinel.pwd),
             portals_ips=[self.configuration.target_ip_address],
             portals_port=self.configuration.target_port)
-
-    def _test_create_rtslib_error_network_portal(self, ip):
-        with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
-                mock.patch.object(rtslib_fb, 'LUN') as lun, \
-                mock.patch.object(rtslib_fb, 'TPG') as tpg, \
-                mock.patch.object(rtslib_fb, 'FabricModule') as fabric_module, \
-                mock.patch.object(rtslib_fb, 'Target') as target, \
-                mock.patch.object(rtslib_fb, 'BlockStorageObject') as \
-                block_storage_object, \
-                mock.patch.object(rtslib_fb.root, 'RTSRoot') as rts_root:
-            root_new = mock.MagicMock(storage_objects=mock.MagicMock())
-            rts_root.return_value = root_new
-            block_storage_object.return_value = mock.sentinel.so_new
-            target.return_value = mock.sentinel.target_new
-            fabric_module.return_value = mock.sentinel.fabric_new
-            tpg_new = tpg.return_value
-            lun.return_value = mock.sentinel.lun_new
-
-            if ip == '0.0.0.0':
-                network_portal.side_effect = rtslib_fb.utils.RTSLibError()
-                self.assertRaises(exception.LIOTargetError,
-                                  target_lio.create,
-                                  mock.sentinel.backing_device,
-                                  mock.sentinel.name,
-                                  mock.sentinel.userid,
-                                  mock.sentinel.password,
-                                  mock.sentinel.iser_enabled)
-            else:
-                target_lio.create(mock.sentinel.backing_device,
-                                  mock.sentinel.name,
-                                  mock.sentinel.userid,
-                                  mock.sentinel.password,
-                                  mock.sentinel.iser_enabled)
-
-            rts_root.assert_called_once_with()
-            block_storage_object.assert_called_once_with(
-                name=mock.sentinel.name, dev=mock.sentinel.backing_device)
-            target.assert_called_once_with(mock.sentinel.fabric_new,
-                                           mock.sentinel.name, 'create')
-            fabric_module.assert_called_once_with('iscsi')
-            tpg.assert_called_once_with(mock.sentinel.target_new,
-                                        mode='create')
-            tpg_new.set_attribute.assert_called_once_with('authentication',
-                                                          '1')
-            lun.assert_called_once_with(tpg_new,
-                                        storage_object=mock.sentinel.so_new)
-            self.assertEqual(1, tpg_new.enable)
-
-            if ip == '::0':
-                ip = '[::0]'
-
-            network_portal.assert_any_call(tpg_new, ip, 3260, mode='any')
-
-    def test_create_rtslib_error_network_portal_ipv4(self):
-        with mock.patch('sys.stdout', new=six.StringIO()):
-            self._test_create_rtslib_error_network_portal('0.0.0.0')
-
-    def test_create_rtslib_error_network_portal_ipv6(self):
-        with mock.patch('sys.stdout', new=six.StringIO()):
-            self._test_create_rtslib_error_network_portal('::0')
-
-    def _test_create(self, ip):
-        with mock.patch.object(rtslib_fb, 'NetworkPortal') as network_portal, \
-                mock.patch.object(rtslib_fb, 'LUN') as lun, \
-                mock.patch.object(rtslib_fb, 'TPG') as tpg, \
-                mock.patch.object(rtslib_fb, 'FabricModule') as fabric_module, \
-                mock.patch.object(rtslib_fb, 'Target') as target, \
-                mock.patch.object(rtslib_fb, 'BlockStorageObject') as \
-                block_storage_object, \
-                mock.patch.object(rtslib_fb.root, 'RTSRoot') as rts_root:
-            root_new = mock.MagicMock(storage_objects=mock.MagicMock())
-            rts_root.return_value = root_new
-            block_storage_object.return_value = mock.sentinel.so_new
-            target.return_value = mock.sentinel.target_new
-            fabric_module.return_value = mock.sentinel.fabric_new
-            tpg_new = tpg.return_value
-            lun.return_value = mock.sentinel.lun_new
-
-            cinder_rtstool.create(mock.sentinel.backing_device,
-                                  mock.sentinel.name,
-                                  mock.sentinel.userid,
-                                  mock.sentinel.password,
-                                  mock.sentinel.iser_enabled)
-
-            rts_root.assert_called_once_with()
-            block_storage_object.assert_called_once_with(
-                name=mock.sentinel.name, dev=mock.sentinel.backing_device)
-            target.assert_called_once_with(mock.sentinel.fabric_new,
-                                           mock.sentinel.name, 'create')
-            fabric_module.assert_called_once_with('iscsi')
-            tpg.assert_called_once_with(mock.sentinel.target_new,
-                                        mode='create')
-            tpg_new.set_attribute.assert_called_once_with('authentication',
-                                                          '1')
-            lun.assert_called_once_with(tpg_new,
-                                        storage_object=mock.sentinel.so_new)
-            self.assertEqual(1, tpg_new.enable)
-
-            if ip == '::0':
-                ip = '[::0]'
-
-            network_portal.assert_any_call(tpg_new, ip, 3260, mode='any')
-
-    def test_create_ipv4(self):
-        self._test_create('0.0.0.0')
-
-    def test_create_ipv6(self):
-        self._test_create('::0')
 
