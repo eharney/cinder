@@ -155,6 +155,9 @@ def _get_qemu_convert_cmd(src, dest, out_format, src_format=None,
     if cache_mode:
         cmd += ('-t', cache_mode)
 
+    if out_format == 'qcow2':
+        cmd += ('-c')
+
     if out_subformat:
         cmd += ('-o', 'subformat=%s' % out_subformat)
 
@@ -206,8 +209,21 @@ def check_qemu_img_version(minimum_version):
 
 def _convert_image(prefix, source, dest, out_format,
                    out_subformat=None, src_format=None,
-                   run_as_root=True, cipher_spec=None, passphrase_file=None):
-    """Convert image to other format."""
+                   run_as_root=True, cipher_spec=None,
+                   passphrase_file=None, compress=False):
+    """Convert image to other format.
+
+    :param prefix:  ??
+    :param source: source filename
+    :param dest: destination filename
+    :param out_format: output format of qemu-img
+    :param out_subformat: ??
+    :param src_format: source image format
+    :param run_as_root: run qemu-img as root
+    :param cipher_spec: encryption details
+    :param passphrase_file: filename containing luks passphrase
+    :param compress: compress w/ qemu-img when possible (best effort)
+    """
 
     # Check whether O_DIRECT is supported and set '-t none' if it is
     # This is needed to ensure that all data hit the device before
@@ -234,7 +250,8 @@ def _convert_image(prefix, source, dest, out_format,
                                 cache_mode=cache_mode,
                                 prefix=prefix,
                                 cipher_spec=cipher_spec,
-                                passphrase_file=passphrase_file)
+                                passphrase_file=passphrase_file,
+                                compress=compress)
 
     start_time = timeutils.utcnow()
 
@@ -286,7 +303,8 @@ def _convert_image(prefix, source, dest, out_format,
 
 def convert_image(source, dest, out_format, out_subformat=None,
                   src_format=None, run_as_root=True, throttle=None,
-                  cipher_spec=None, passphrase_file=None):
+                  cipher_spec=None, passphrase_file=None,
+                  compress=False):
     if not throttle:
         throttle = throttling.Throttle.get_default()
     with throttle.subcommand(source, dest) as throttle_cmd:
@@ -297,7 +315,8 @@ def convert_image(source, dest, out_format, out_subformat=None,
                        src_format=src_format,
                        run_as_root=run_as_root,
                        cipher_spec=cipher_spec,
-                       passphrase_file=passphrase_file)
+                       passphrase_file=passphrase_file,
+                       compress=compress)
 
 
 def resize_image(source, size, run_as_root=False):
