@@ -1099,3 +1099,12 @@ class ServiceUserTokenNoAuth(CinderException):
     message = _("The [service_user] send_service_user_token option was "
                 "requested, but no service auth could be loaded. Please check "
                 "the [service_user] configuration section.")
+
+
+class DuplicateAttachmentDetected(CinderException):
+    message = _("duplicate attachment detected")
+
+    def __init__(self, attachment):
+        self.att = attachment
+
+        super(DuplicateAttachmentDetected, self).__init__(message)
