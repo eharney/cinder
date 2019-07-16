@@ -32,6 +32,7 @@ import six
 from cinder.api import common
 from cinder.common import constants
 from cinder import context
+from cinder import coordination
 from cinder import db
 from cinder.db import base
 from cinder import exception
@@ -2155,6 +2156,7 @@ class API(base.Base):
         attachment_ref.save()
         return attachment_ref
 
+    @coordination.synchronized('{f_name}-{attachment_ref.volume_id}')
     def attachment_update(self, ctxt, attachment_ref, connector):
         """Update an existing attachment record."""
         # Valid items to update (connector includes mode and mountpoint):
@@ -2163,11 +2165,20 @@ class API(base.Base):
         #     b. mountpoint (if None use value from attachment_ref)
         #     c. instance_uuid(if None use value from attachment_ref)
 
+        # This method has a synchronized() lock on the volume id
+        # because we have to prevent race conditions around checking
+        # for duplicate attachment requests to the same host.
+
         # We fetch the volume object and pass it to the rpc call because we
         # need to direct this to the correct host/backend
 
+        LOG.debug("EMH in attachment_update")
+        LOG.debug("attachment_ref id: %s", attachment_ref.id)
+        LOG.debug("connector: %s", connector)
+
         ctxt.authorize(attachment_policy.UPDATE_POLICY,
                        target_obj=attachment_ref)
+
         volume_ref = objects.Volume.get_by_id(ctxt, attachment_ref.volume_id)
         if "error" in volume_ref.status:
             msg = ('Volume attachments can not be updated if the volume '
@@ -2177,6 +2188,31 @@ class API(base.Base):
                        'volume_status': volume_ref.status}
             LOG.error(msg)
             raise exception.InvalidVolume(reason=msg)
+
+        if (len(volume_ref.volume_attachment) > 1 and
+            not (volume_ref.multiattach or
+                 self._is_multiattach(volume_ref.volume_type))):
+            connection_hosts = set([a.connector['host']
+                                    for a in volume_ref.volume_attachment
+                                    if a.connector])
+
+            # Check whether all connection hosts are unique
+            # Multiple attachments to different hosts is permitted to
+            # support Nova instance migration.
+            if len(connection_hosts) < len(volume_ref.volume_attachment):
+                # We raced, and all connection hosts are not unique
+                # Remove one that doesn't have connection_info yet, and fail
+               
+                for a in volume_ref.volume_attachment:
+                    if not a.connection_info:
+                        LOG.debug("removing attachment: %s", a)
+                        a.destroy()
+
+                        msg = _('duplicate connectors detected on volume %(vol)s') % {'vol': volume_ref.id}
+                        raise exception.InvalidVolume(reason=msg)
+
+                volume_ref.refresh()   # Reload volume attachment list
+
         connection_info = (
             self.volume_rpcapi.attachment_update(ctxt,
                                                  volume_ref,
