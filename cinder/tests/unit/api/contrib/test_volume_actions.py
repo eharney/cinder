@@ -720,7 +720,7 @@ class VolumeRetypeActionsTest(test.TestCase):
 
         vol = utils.create_volume(self.context,
                                   status=vol_status,
-                                  volume_type_id=vol_type_old,
+                                  volume_type_id=vol_type_old['id'],
                                   testcase_instance=self)
 
         self._retype_volume_exec(expected_status, vol_type_new, vol.id)
