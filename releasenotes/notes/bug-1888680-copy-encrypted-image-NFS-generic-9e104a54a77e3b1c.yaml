@@ -1,0 +1,7 @@
+---
+fixes:
+  - |
+    NFS Generic driver `bug #1888680
+    <https://bugs.launchpad.net/cinder/+bug/1888680>`_: Fixed
+    NFS LUKS volume creation from an image incorrectly reformats
+    volume as plain LUKS instead of an encrypted QCOW2 volume.

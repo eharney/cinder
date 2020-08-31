@@ -16,6 +16,7 @@
 
 import errno
 import os
+import tempfile
 from unittest import mock
 
 import castellan
@@ -541,6 +542,52 @@ class NfsDriverTestCase(test.TestCase):
         mock_resize.assert_called_once_with(test_img_source,
                                             self.TEST_SIZE_IN_GB,
                                             run_as_root=True)
+
+    @mock.patch('cinder.image.image_utils.convert_image')
+    @ddt.data(NFS_CONFIG1, NFS_CONFIG2, NFS_CONFIG3, NFS_CONFIG4)
+    def test_copy_image_to_encrypted_volume(self, nfs_config,
+                                            mock_convert):
+        """Create an encrypted volume from an image."""
+        self._set_driver()
+
+        loc = self.TEST_NFS_EXPORT1
+
+        self.mock_object(os.path, 'exists', return_value=True)
+        self.mock_object(self._driver, 'delete_volume')
+        self.mock_object(tempfile, 'NamedTemporaryFile')
+        self.mock_object(image_utils, 'fetch_to_raw')
+        self.mock_object(os, 'rename')
+
+        mock_image_service = mock.MagicMock()
+
+        # Generate encryption key
+        key_mgr = fake_keymgr.fake_api()
+        self.mock_object(castellan.key_manager, 'API', return_value=key_mgr)
+        key_id = key_mgr.store(self.context, KeyObject())
+
+        info_dic = {'name': u'volume-0000000a',
+                    'id': '55555555-222f-4b32-b585-9991b3bf0a99',
+                    'size': 10,
+                    'encryption_key_id': key_id}
+
+        enc_info = {'encryption_key_id': key_id,
+                    'cipher': 'aes-xts-essiv',
+                    'key_size': 256,
+                    'provider': 'luks'}
+
+        volume = fake_volume.fake_volume_obj(self.context,
+                                             provider_location=loc,
+                                             **info_dic)
+
+        mock_encryp_provider = self.mock_object(volume_utils,
+                                                'check_encryption_provider',
+                                                return_value=enc_info)
+
+        with mock.patch('cinder.volume.drivers.nfs.open'):
+            args = [self.context, volume, mock_image_service, None]
+            self._driver.copy_image_to_encrypted_volume(*args)
+            mock_convert.assert_called_once()
+            mock_encryp_provider.assert_called_once()
 
     def test_get_mount_point_for_share(self):
         """_get_mount_point_for_share should calculate correct value."""

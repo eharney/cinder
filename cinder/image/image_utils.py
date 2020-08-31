@@ -285,7 +285,9 @@ def _get_qemu_convert_cmd(src: str,
                           passphrase_file: Optional[str] = None,
                           compress: bool = False,
                           src_passphrase_file: Optional[str] = None,
-                          disable_sparse: bool = False) -> list[str]:
+                          disable_sparse: bool = False,
+                          encrypt_format: Optional[str] = None) \
+        -> list[str]:
     if src_passphrase_file is not None:
         if passphrase_file is None:
             message = _("Can't create unencrypted volume %(format)s "
@@ -338,9 +340,22 @@ def _get_qemu_convert_cmd(src: str,
         assert src_format is not None
         cmd += ['-f', src_format]  # prevent detection of format
 
+    # NOTE: When converting to LUKS inside qcow2 add the cipher spec
+    # if present and create a secret for the passphrase, written to a
+    # temp file
+    if out_format == 'qcow2' and cipher_spec and encrypt_format:
+        cmd += ('-o',
+                'encrypt.format=%s,' % encrypt_format +
+                'encrypt.key-secret=luks_sec,' +
+                'encrypt.cipher-alg=%s,' % cipher_spec['cipher_alg'] +
+                'encrypt.cipher-mode=%s,' % cipher_spec['cipher_mode'] +
+                'encrypt.ivgen-alg=%s' % cipher_spec['ivgen_alg'],
+                '--object',
+                'secret,id=luks_sec,format=raw,file=%s' % passphrase_file)
+
     # NOTE(lyarwood): When converting to LUKS add the cipher spec if present
     # and create a secret for the passphrase, written to a temp file
-    if out_format == 'luks':
+    elif out_format == 'luks':
         if cipher_spec:
             cmd += ('-o', 'cipher-alg=%s,cipher-mode=%s,ivgen-alg=%s' %
                     (cipher_spec['cipher_alg'], cipher_spec['cipher_mode'],
@@ -389,7 +404,8 @@ def _convert_image(
         compress: bool = False,
         src_passphrase_file: Optional[str] = None,
         disable_sparse: bool = False,
-        src_img_info: Optional[imageutils.QemuImgInfo] = None) -> None:
+        src_img_info: Optional[imageutils.QemuImgInfo] = None,
+        encrypt_format: Optional[str] = None) -> None:
     """Convert image to other format.
 
     NOTE: If the qemu-img convert command fails and this function raises an
@@ -404,12 +420,14 @@ def _convert_image(
     :param src_format: source image format
     :param run_as_root: run qemu-img as root
     :param cipher_spec: encryption details
+    NOTE: Due to qemu limitations only luks1 is currently supported.
     :param passphrase_file: filename containing luks passphrase
     :param compress: compress w/ qemu-img when possible (best effort)
     :param src_passphrase_file: filename containing source volume's
                                 luks passphrase
     :param src_img_info: a imageutils.QemuImgInfo object from this image,
                             or None
+    :param encrypt_format: encryption type used with qcow2
     """
 
     # Check whether O_DIRECT is supported and set '-t none' if it is
@@ -441,7 +459,8 @@ def _convert_image(
                                 passphrase_file=passphrase_file,
                                 compress=compress,
                                 src_passphrase_file=src_passphrase_file,
-                                disable_sparse=disable_sparse)
+                                disable_sparse=disable_sparse,
+                                encrypt_format=encrypt_format)
 
     start_time = timeutils.utcnow()
 
@@ -520,7 +539,8 @@ def convert_image(source: str,
                   src_passphrase_file: Optional[str] = None,
                   image_id: Optional[str] = None,
                   data: Optional[imageutils.QemuImgInfo] = None,
-                  disable_sparse: bool = False) -> None:
+                  disable_sparse: bool = False,
+                  encrypt_format: Optional[str] = None) -> None:
     """Convert image to other format.
 
     NOTE: If the qemu-img convert command fails and this function raises an
@@ -542,6 +562,7 @@ def convert_image(source: str,
                                 luks passphrase
     :param image_id: the image ID if this is a Glance image, or None
     :param data: a imageutils.QemuImgInfo object from this image, or None
+    :param encrypt_format: encryption format
     :raises ImageUnacceptable: when the image fails some format checks
     :raises ProcessExecutionError: when something goes wrong during conversion
     """
@@ -561,7 +582,8 @@ def convert_image(source: str,
                        compress=compress,
                        src_passphrase_file=src_passphrase_file,
                        disable_sparse=disable_sparse,
-                       src_img_info=data)
+                       src_img_info=data,
+                       encrypt_format=encrypt_format)
 
 
 def resize_image(source: str,

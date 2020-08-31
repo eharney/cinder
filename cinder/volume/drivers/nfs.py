@@ -701,3 +701,50 @@ class NfsDriver(remotefs.RemoteFSSnapDriverDistributed):
                                       data=snap_backing_file_img_info)
 
         self._set_rw_permissions_for_all(path_to_new_vol)
+
+    def copy_image_to_encrypted_volume(self, context, volume, image_service,
+                                       image_id):
+        """Copy Glance image to LUKS volume.
+
+        This method fetches the image to raw and then converts it to
+        LUKS inside qcow2.
+
+        Due to qemu limitations only luks v1 is currently supported.
+        """
+
+        # NOTE: A new empty volume is created for this operation so if the
+        # convert operation fall should not affect the data in the volume.
+        volume_path = self.local_path(volume)
+        tmp_dir = volume_utils.image_conversion_dir()
+        encryption = volume_utils.check_encryption_provider(volume, context)
+        encrypt_format = encryption['provider']
+        out_format = 'qcow2'
+
+        # Fetch the key associated with the volume and decode the passphrase
+        keymgr = key_manager.API(CONF)
+        key = keymgr.get(context, encryption['encryption_key_id'])
+        passphrase = binascii.hexlify(key.get_encoded()).decode('utf-8')
+
+        # Decode the dm-crypt style cipher spec into something qemu-img can use
+        cipher_spec = image_utils.decode_cipher(encryption['cipher'],
+                                                encryption['key_size'])
+
+        with tempfile.NamedTemporaryFile(dir=tmp_dir) as src_image_path:
+            image_utils.fetch_to_raw(context, image_service, image_id,
+                                     src_image_path.name,
+                                     self.configuration.volume_dd_blocksize,
+                                     size=volume.size)
+
+            with tempfile.NamedTemporaryFile(prefix='luks_',
+                                             dir=tmp_dir) as pass_file:
+                # Create a secret for the passphrase, written to a temp file
+                with open(pass_file.name, 'w') as f:
+                    f.write(passphrase)
+
+                image_utils.convert_image(src_image_path.name,
+                                          volume_path,
+                                          src_format='raw',
+                                          out_format=out_format,
+                                          cipher_spec=cipher_spec,
+                                          passphrase_file=pass_file.name,
+                                          encrypt_format=encrypt_format)

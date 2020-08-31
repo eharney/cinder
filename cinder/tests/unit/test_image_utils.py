@@ -464,6 +464,46 @@ class TestConvertImage(test.TestCase):
                                           '-O', out_format, '-S', '0', source,
                                           dest, run_as_root=True)
 
+    @mock.patch('cinder.image.image_utils.qemu_img_info')
+    @mock.patch('cinder.utils.execute')
+    @mock.patch('cinder.utils.is_blk_device', return_value=False)
+    def test_convert_to_luksv1_inside_qcow2(self, mock_isblk, mock_exec,
+                                            mock_info):
+        source = mock.sentinel.source
+        dest = mock.sentinel.dest
+        out_format = 'qcow2'
+        src_format = 'raw'
+        passphrase_file = 'passphrase_file'
+        encrypt_format = 'luks'
+        mock_info.return_value.file_format = src_format
+        mock_info.return_value.virtual_size = 1048576
+        cipher_spec = {'cipher_alg': 'aes-256',
+                       'cipher_mode': 'xts',
+                       'ivgen_alg': 'plain64'}
+
+        image_utils.convert_image(source,
+                                  dest,
+                                  src_format=src_format,
+                                  out_format=out_format,
+                                  cipher_spec=cipher_spec,
+                                  passphrase_file=passphrase_file,
+                                  encrypt_format=encrypt_format)
+
+        exec_args = ['qemu-img', 'convert', '-O', out_format,
+                     '-f', src_format,
+                     '-o',
+                     'encrypt.format=%s,' % encrypt_format +
+                     'encrypt.key-secret=luks_sec,' +
+                     'encrypt.cipher-alg=%s,' % cipher_spec['cipher_alg'] +
+                     'encrypt.cipher-mode=%s,' % cipher_spec['cipher_mode'] +
+                     'encrypt.ivgen-alg=%s' % cipher_spec['ivgen_alg'],
+                     '--object',
+                     'secret,id=luks_sec,format=raw,file=%s' % passphrase_file]
+
+        exec_args.extend((source, dest))
+        mock_exec.assert_called_once_with(*exec_args,
+                                          run_as_root=True)
+
     @mock.patch('cinder.volume.volume_utils.check_for_odirect_support',
                 return_value=True)
     @mock.patch('cinder.image.image_utils.qemu_img_info')
