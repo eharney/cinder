@@ -74,6 +74,11 @@ class VolumeTypeEncryptionController(wsgi.Controller):
         if key_size is not None:
             body['encryption']['key_size'] = int(key_size)
 
+        cipher = body['encryption'].get('cipher')
+        if cipher in (None, ""):
+            expl = _('Encryption cipher must be specified.')
+            raise webob.exc.HTTPBadRequest(explanation=expl)
+
         if self._encrypted_type_in_use(context, type_id):
             expl = _('Cannot create encryption specs. Volume type in use.')
             raise webob.exc.HTTPBadRequest(explanation=expl)
