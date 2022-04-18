@@ -1273,7 +1273,7 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         volume_name = utils.convert_str(volume.name)
         with RADOSClient(self) as client:
             try:
-                rbd_image = self.rbd.Image(client.ioctx, volume_name)
+                rbd_image = self.rbd.Image(client.ioctx, volume_name, read_only=True)
             except self.rbd.ImageNotFound:
                 LOG.info("volume %s no longer exists in backend",
                          volume_name)
@@ -1317,6 +1317,8 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
                     except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
                         delay = 0
 
+                # reopen  (TODO: close previous?)
+                rbd_image = self.rbd.Image(client.ioctx, volume_name, read_only=True)
                 children = rbd_image.list_children()
                 if children:
                     LOG.debug("children: %s", children)
