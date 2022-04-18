@@ -290,6 +290,8 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         self.keyring_data: Optional[str] = None
         self._set_keyring_attributes()
 
+        self._semaphore = utils.semaphore_factory(3, 1)
+
     def _set_keyring_attributes(self) -> None:
         # The rbd_keyring_conf option is not available for OpenStack usage
         # for security reasons (OSSN-0085) and in OpenStack we use
@@ -1058,10 +1060,18 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         return volume_update
 
     def _flatten(self, pool: str, volume_name: str) -> None:
-        LOG.debug('flattening %(pool)s/%(img)s',
-                  dict(pool=pool, img=volume_name))
-        with RBDVolumeProxy(self, volume_name, pool) as vol:
-            vol.flatten()
+        @utils.limit_operations
+        def do_flatten(self, volume_name, pool):
+            LOG.debug('flattening %(pool)s/%(img)s',
+                      dict(pool=pool, img=volume_name))
+            with RBDVolumeProxy(self, volume_name) as vol:
+                try:
+                    vol.flatten()
+                except self.rbd.InvalidArgument as e:
+                    LOG.debug(e)
+                    raise e
+
+        do_flatten(self, volume_name, pool)
 
     def _get_stripe_unit(self, ioctx: 'rados.Ioctx', volume_name: str) -> int:
         """Return the correct stripe unit for a cloned volume.
@@ -1278,7 +1288,6 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
             # If the volume has non-clone snapshots this delete is expected to
             # raise VolumeIsBusy so do so straight away.
             try:
-                children = rbd_image.list_children()
                 snaps = rbd_image.list_snaps()
                 for snap in snaps:
                     if snap['name'].endswith('.clone_snap'):
@@ -1308,7 +1317,9 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
                     except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
                         delay = 0
 
+                children = rbd_image.list_children()
                 if children:
+                    LOG.debug("children: %s", children)
                     for pool, child_name in children:
                         self._flatten(pool, child_name)
                     self.RBDProxy().remove(client.ioctx, volume_name)
@@ -1370,9 +1381,13 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
         volume_name = utils.convert_str(snapshot.volume_name)
         snap_name = utils.convert_str(snapshot.name)
 
-        with RBDVolumeProxy(self, volume_name) as volume:
+        @utils.retry(rbd.ImageBusy,
+                     self.configuration.rados_connection_interval,
+                     self.configuration.rados_connection_retries)
+        def do_unprotect_snap(self, volume_name, snap_name):
             try:
-                volume.unprotect_snap(snap_name)
+                with RBDVolumeProxy(self, volume_name) as volume:
+                    volume.unprotect_snap(snap_name)
             except self.rbd.InvalidArgument:
                 LOG.info(
                     "InvalidArgument: Unable to unprotect snapshot %s.",
@@ -1381,23 +1396,31 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
                 LOG.info(
                     "ImageNotFound: Unable to unprotect snapshot %s.",
                     snap_name)
-            except self.rbd.ImageBusy:
-                children_list = self._get_children_info(volume, snap_name)
+            except self.rbd.ImageBusy as e:
+                volume.close()
+                with RBDVolumeProxy(self, volume_name) as volume:
+                    children_list = self._get_children_info(volume, snap_name)
 
-                if children_list:
-                    for (pool, image) in children_list:
-                        LOG.info('Image %(pool)s/%(image)s is dependent '
-                                 'on the snapshot %(snap)s.',
-                                 {'pool': pool,
-                                  'image': image,
-                                  'snap': snap_name})
+                    if children_list:
+                        for (pool, image) in children_list:
+                            LOG.info('Image %(pool)s/%(image)s is dependent '
+                                     'on the snapshot %(snap)s.',
+                                     {'pool': pool,
+                                      'image': image,
+                                      'snap': snap_name})
+                            volume.close()
+                            self._flatten(pool, image)
+                        raise e
 
                 raise exception.SnapshotIsBusy(snapshot_name=snap_name)
-            try:
+
+        do_unprotect_snap(self, volume_name, snap_name)
+        try:
+            with RBDVolumeProxy(self, volume_name) as volume:
                 volume.remove_snap(snap_name)
-            except self.rbd.ImageNotFound:
-                LOG.info("Snapshot %s does not exist in backend.",
-                         snap_name)
+        except self.rbd.ImageNotFound:
+            LOG.info("Snapshot %s does not exist in backend.",
+                     snap_name)
 
     def snapshot_revert_use_temp_snapshot(self) -> bool:
         """Disable the use of a temporary snapshot on revert."""
