@@ -1,0 +1,13 @@
+---
+upgrade:
+  - |
+    Cinder now uses the RBD trash functionality to handle some volume deletions.
+    Therefore, deployments must either a) enable scheduled RBD trash purging on
+    the RBD backend or b) enable the Cinder RBD driver's enable_deferred_deletion
+    option to have Cinder purge the RBD trash.
+fixes:
+  - |
+    `Bug #1969643 <https://bugs.launchpad.net/cinder/+bug/1969643>`_:
+    The RBD driver can now delete volumes with other volumes cloned from it
+    (or its snapshots) in cases where deletion would previously fail.  This
+    uses the RBD trash functionality.
