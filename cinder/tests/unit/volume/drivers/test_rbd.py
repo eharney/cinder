@@ -188,6 +188,7 @@ class RBDTestCase(test.TestCase):
         cfg.rados_connection_interval = 5
         cfg.backup_use_temp_snapshot = False
         cfg.enable_deferred_deletion = False
+        cfg.rbd_concurrent_flatten_operations = 3
 
         if conf_in is not None:
             for k in conf_in:
@@ -777,7 +778,7 @@ class RBDTestCase(test.TestCase):
                 self.assertFalse(
                     drv.rbd.Image.return_value.unprotect_snap.called)
                 self.assertEqual(
-                    1, drv.rbd.RBD.return_value.trash_move.call_count)
+                    0, drv.rbd.RBD.return_value.trash_move.call_count)
                 self.driver.rbd.RBD.return_value.remove.assert_not_called()
 
     @common_mocks
@@ -833,7 +834,7 @@ class RBDTestCase(test.TestCase):
             drv.delete_volume(self.volume_a)
 
             self.assertEqual(
-                1, drv.rbd.RBD.return_value.trash_move.call_count)
+                0, drv.rbd.RBD.return_value.trash_move.call_count)
 
     @common_mocks
     def test_deferred_deletion_w_deleted_parent(self):
@@ -847,7 +848,7 @@ class RBDTestCase(test.TestCase):
             drv.delete_volume(self.volume_a)
 
             self.assertEqual(
-                2, drv.rbd.RBD.return_value.trash_move.call_count)
+                1, drv.rbd.RBD.return_value.trash_move.call_count)
 
     @common_mocks
     def test_delete_volume_not_found_at_open(self):
@@ -865,7 +866,8 @@ class RBDTestCase(test.TestCase):
         self.mock_rbd.Image.return_value.list_snaps.return_value = []
 
         self.mock_rbd.RBD.return_value.remove.side_effect = (
-            self.mock_rbd.ImageBusy)
+            self.mock_rbd.ImageBusy,
+            None)
 
         with mock.patch.object(self.driver, '_get_clone_info') as \
                 mock_get_clone_info:
@@ -874,37 +876,51 @@ class RBDTestCase(test.TestCase):
                     mock_delete_backup_snaps:
                 with mock.patch.object(driver, 'RADOSClient') as \
                         mock_rados_client:
-                    self.driver.delete_volume(self.volume_a)
+                    with mock.patch.object(self.driver, '_flatten') as \
+                            mock_flatten:
+                        self.driver.rbd.Image.return_value.list_children.\
+                            return_value = [('pool1', 'child1'),
+                                            ('pool1', 'child2')]
+                        self.driver.delete_volume(self.volume_a)
 
-                    mock_get_clone_info.assert_called_once_with(
-                        self.mock_rbd.Image.return_value,
-                        self.volume_a.name,
-                        None)
-                    (self.mock_rbd.Image.return_value.list_snaps
-                     .assert_called_once_with())
-                    mock_rados_client.assert_called_once_with(self.driver)
-                    mock_delete_backup_snaps.assert_called_once_with(
-                        self.mock_rbd.Image.return_value)
-                    self.assertFalse(
-                        self.mock_rbd.Image.return_value.unprotect_snap.called)
-                    self.assertEqual(
-                        1, self.mock_rbd.RBD.return_value.remove.call_count)
-                    self.assertEqual(1, len(RAISED_EXCEPTIONS))
-                    # Make sure the exception was raised
-                    self.assertIn(self.mock_rbd.ImageBusy, RAISED_EXCEPTIONS)
+                        self.driver.rbd.Image.return_value.list_children.\
+                            assert_called_once_with()
 
-                    self.mock_rbd.RBD.return_value.trash_move.\
-                        assert_called_once_with(
-                            mock.ANY,
+                        mock_flatten.assert_has_calls(
+                            [mock.call('pool1', 'child1'),
+                             mock.call('pool1', 'child2')])
+
+                        mock_get_clone_info.assert_called_once_with(
+                            self.mock_rbd.Image.return_value,
                             self.volume_a.name,
-                            0)
+                            None)
+                        (self.mock_rbd.Image.return_value.list_snaps
+                         .assert_called_once_with())
+                        mock_rados_client.assert_called_once_with(self.driver)
+                        mock_delete_backup_snaps.assert_called_once_with(
+                            self.mock_rbd.Image.return_value)
+                        self.assertFalse(
+                            self.mock_rbd.Image.return_value.unprotect_snap.
+                            called)
+                        self.assertEqual(
+                            2,
+                            self.mock_rbd.RBD.return_value.remove.call_count)
+                        self.assertEqual(1, len(RAISED_EXCEPTIONS))
+                        # Make sure the exception was raised
+                        self.assertIn(self.mock_rbd.ImageBusy,
+                                      RAISED_EXCEPTIONS)
+
+                        self.mock_rbd.RBD.return_value.trash_move.\
+                            assert_not_called()
 
     @common_mocks
     def test_delete_volume_has_snapshots(self):
         self.mock_rbd.Image.return_value.list_snaps.return_value = []
 
         self.mock_rbd.RBD.return_value.remove.side_effect = (
-            self.mock_rbd.ImageHasSnapshots)
+            self.mock_rbd.ImageHasSnapshots,  # initial vol remove attempt
+            None                              # removal of child image
+        )
         mock_get_clone_info = self.mock_object(self.driver,
                                                '_get_clone_info',
                                                return_value=(None,
@@ -928,17 +944,14 @@ class RBDTestCase(test.TestCase):
             self.assertFalse(
                 self.mock_rbd.Image.return_value.unprotect_snap.called)
             self.assertEqual(
-                1, self.mock_rbd.RBD.return_value.remove.call_count)
+                2, self.mock_rbd.RBD.return_value.remove.call_count)
             self.assertEqual(1, len(RAISED_EXCEPTIONS))
             # Make sure the exception was raised
             self.assertIn(self.mock_rbd.ImageHasSnapshots,
                           RAISED_EXCEPTIONS)
 
             self.mock_rbd.RBD.return_value.trash_move.\
-                assert_called_once_with(
-                    mock.ANY,
-                    self.volume_a.name,
-                    0)
+                assert_not_called()
 
     @common_mocks
     def test_delete_volume_not_found(self):
@@ -1190,7 +1203,36 @@ class RBDTestCase(test.TestCase):
         proxy.__enter__.return_value = proxy
 
         proxy.unprotect_snap.side_effect = (
-            self.mock_rbd.ImageBusy)
+            self.mock_rbd.ImageBusy,
+            None)
+
+        with mock.patch.object(self.driver, '_get_children_info') as \
+                mock_get_children_info:
+            mock_get_children_info.return_value = [('pool', 'volume2')]
+
+            with mock.patch.object(driver, 'LOG') as mock_log:
+                self.driver.delete_snapshot(self.snapshot)
+
+                mock_get_children_info.assert_called_once_with(
+                    proxy,
+                    self.snapshot.name)
+
+                self.assertTrue(mock_log.info.called)
+                self.assertTrue(proxy.unprotect_snap.called)
+                self.assertTrue(proxy.remove_snap.called)
+
+    @common_mocks
+    @mock.patch.object(driver.RBDDriver, '_flatten')
+    @mock.patch('cinder.objects.Volume.get_by_id')
+    def test_delete_busy_snapshot_fail(self, volume_get_by_id, flatten_mock):
+        volume_get_by_id.return_value = self.volume_a
+        proxy = self.mock_proxy.return_value
+        proxy.__enter__.return_value = proxy
+
+        proxy.unprotect_snap.side_effect = (
+            self.mock_rbd.ImageBusy,
+            None)
+        flatten_mock.side_effect = exception.SnapshotIsBusy(self.snapshot.name)
 
         with mock.patch.object(self.driver, '_get_children_info') as \
                 mock_get_children_info:
