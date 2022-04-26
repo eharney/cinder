@@ -151,6 +151,12 @@ class VolumeAdminController(AdminController):
         if status:
             update['status'] = status.lower()
 
+            if update['status'] in ('deleting',
+                                    'error_deleting',
+                                    'detaching'):
+                msg = _('Cannot reset-state to %s' % update['status'])
+                raise webob.exc.HTTPBadRequest(explanation=msg)
+
         if attach_status:
             update['attach_status'] = attach_status.lower()
 
@@ -183,7 +189,7 @@ class VolumeAdminController(AdminController):
         # at this point, we still don't know if we're going to
         # reset the volume's state.  Need to check what the caller
         # is requesting first.
-        if update.get('status') in ('deleting', 'error_deleting'
+        if update.get('status') in ('deleting', 'error_deleting',
                                     'detaching'):
             msg = _("Cannot reset-state to %s"
                     % update.get('status'))

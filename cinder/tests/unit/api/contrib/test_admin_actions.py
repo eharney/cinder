@@ -149,9 +149,7 @@ class AdminActionsTest(BaseAdminTest):
 
     @ddt.data({'os-reset_status': {'status': 'creating'}},
               {'os-reset_status': {'status': 'available'}},
-              {'os-reset_status': {'status': 'deleting'}},
               {'os-reset_status': {'status': 'error'}},
-              {'os-reset_status': {'status': 'error_deleting'}},
               {'os-reset_status': {'attach_status':
                                    fields.VolumeAttachStatus.DETACHED}},
               {'os-reset_status': {'attach_status':
@@ -170,6 +168,24 @@ class AdminActionsTest(BaseAdminTest):
         req.api_version_request = mv.get_api_version(mv.BASE_VERSION)
         vac = self.controller
         vac.validate_update(req, body=body)
+
+    @ddt.data({'os-reset_status': {'status': 'deleting'}},
+              {'os-reset_status': {'status': 'error_deleting'}},
+              {'os-reset_status': {'status': 'detaching'}})
+    def test_invalid_updates(self, body):
+        req = webob.Request.blank('/v3/%s/volumes/%s/action' % (
+            fake.PROJECT_ID, id))
+        req.method = 'POST'
+        req.headers['content-type'] = 'application/json'
+        req.environ['cinder.context'] = self.ctx
+        req.api_version_request = mv.get_api_version(mv.BASE_VERSION)
+        vac = self.controller
+        #vac.validate_update(req, body=body)
+        self.assertRaises(AssertionError,
+                          vac.validate_update,
+                          req,
+                          body=body)
+
 
     @ddt.data({'os-reset_status': {'status': None}},
               {'os-reset_status': {'attach_status': None}},
