@@ -268,7 +268,7 @@ class ExtractVolumeSpecTask(flow_utils.CinderTask):
                                                     requires=requires)
         self.db = db
 
-    def execute(self, context, volume, request_spec):
+    def execute(self, context: cinder_context.RequestContext, volume: objects.Volume, request_spec: dict) -> dict:
         get_remote_image_service = glance.get_remote_image_service
 
         volume_name = volume.name
@@ -493,7 +493,9 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
         return model_update
 
     @staticmethod
-    def _setup_encryption_keys(context, volume, encryption):
+    def _setup_encryption_keys(context: cinder_context.RequestContext,
+                               volume: objects.Volume,
+                               encryption: Dict[str, Any]) -> Tuple[str, str, str]:
         """Return encryption keys in passphrase form for a clone operation.
 
         :param context: context
@@ -515,7 +517,7 @@ class CreateVolumeFromSpecTask(flow_utils.CinderTask):
 
         return (source_pass, new_pass, new_key_id)
 
-    def _rekey_volume(self, context, volume):
+    def _rekey_volume(self, context: cinder_context.RequestContext, volume: objects.Volume) -> dict:
         """Change encryption key on volume.
 
         :returns: model update dict

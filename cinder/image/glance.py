@@ -91,7 +91,7 @@ _SESSION = None
 LOG = logging.getLogger(__name__)
 
 
-def _parse_image_ref(image_href):
+def _parse_image_ref(image_href: str) -> Tuple[str, str, bool]:
     """Parse an image href into composite parts.
 
     :param image_href: href of an image
@@ -695,5 +695,5 @@ def get_remote_image_service(context: context.RequestContext,
     return image_service, image_id
 
 
-def get_default_image_service():
+def get_default_image_service() -> GlanceImageService:
     return GlanceImageService()

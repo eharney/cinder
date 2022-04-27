@@ -950,7 +950,7 @@ def convert_config_string_to_dict(config_string: str) -> dict:
 
 def create_encryption_key(context: context.RequestContext,
                           key_manager,
-                          volume_type_id: str) -> Optional[str]:
+                          volume_type_id: str) -> str:
     encryption_key_id = None
     if volume_types.is_encrypted(context, volume_type_id):
         volume_type_encryption: db.sqlalchemy.models.Encryption = (
@@ -976,7 +976,8 @@ def create_encryption_key(context: context.RequestContext,
             LOG.exception("Key manager error")
             raise exception.Invalid(message="Key manager error")
 
-    typing.cast(str, encryption_key_id)
+    if encryption_key_id is None:
+        raise exception.Invalid(message="Key manager error")
 
     return encryption_key_id
 
@@ -1362,7 +1363,7 @@ def get_backend_configuration(backend_name, backend_opts=None):
 
 
 def brick_get_connector_properties(multipath: bool = False,
-                                   enforce_multipath: bool = False):
+                                   enforce_multipath: bool = False) -> Dict[str, Any]:
     """Wrapper to automatically set root_helper in brick calls.
 
     :param multipath: A boolean indicating whether the connector can
