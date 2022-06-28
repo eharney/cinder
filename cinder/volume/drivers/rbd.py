@@ -1298,16 +1298,52 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
                           'volume_name': volume_name})
                 self._flatten(pool, child_name)
 
+    def _trash_volume(self,
+                      client_ioctx: 'rados.Ioctx',
+                      volume_name: str,
+                      delay: int) -> None:
+        # When using the RBD v2 clone api, deleting a volume
+        # that has a snapshot in the trash space raises a
+        # busy exception.
+        # In order to solve this, call the trash operation
+        # which should succeed when the volume has
+        # dependencies.
+        LOG.debug("moving volume %s to trash", volume_name)
+        try:
+            self.RBDProxy().trash_move(client_ioctx,
+                                       volume_name,
+                                       delay)
+        except self.rbd.ImageBusy:
+            msg = _('ImageBusy error raised while trashing rbd '
+                    'volume.')
+            LOG.warning(msg)
+            raise exception.VolumeIsBusy(msg, volume_name=volume_name)
+
+    def _try_remove_volume(self, client, volume_name: str) -> bool:
+        @utils.retry((self.rbd.ImageBusy, self.rbd.ImageHasSnapshots),
+                     self.configuration.rados_connection_interval,
+                     self.configuration.rados_connection_retries)
+        def _do_try_remove_volume(self, client, volume_name: str) -> bool:
+            try:
+                LOG.debug(f'Trying to remove image {volume_name}')
+                self.RBDProxy().remove(client.ioctx, volume_name)
+                return True
+            except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
+                with excutils.save_and_reraise_exception():
+                    msg = _('deletion failed')
+                    LOG.info(msg)
+
+            return False
+
+        return _do_try_remove_volume(self, client, volume_name)
+
     def delete_volume(self, volume: Volume) -> None:
-        """Deletes a logical volume."""
-        volume_name = volume.name
+        """Deletes an RBD volume."""
         with RADOSClient(self) as client:
             try:
-                rbd_image = self.rbd.Image(client.ioctx,
-                                           volume_name)
+                rbd_image = self.rbd.Image(client.ioctx, volume.name)
             except self.rbd.ImageNotFound:
-                LOG.info("volume %s no longer exists in backend",
-                         volume_name)
+                LOG.info("volume %s no longer exists in backend", volume.name)
                 return
 
             clone_snap = None
@@ -1328,85 +1364,56 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
 
                 # Determine if this volume is itself a clone
                 _pool, parent, parent_snap = self._get_clone_info(rbd_image,
-                                                                  volume_name,
+                                                                  volume.name,
                                                                   clone_snap)
             finally:
                 rbd_image.close()
 
-            @utils.retry(self.rbd.ImageBusy,
-                         self.configuration.rados_connection_interval,
-                         self.configuration.rados_connection_retries)
-            def _try_remove_volume(client: Any, volume_name: str) -> None:
-                if self.configuration.enable_deferred_deletion:
-                    delay = self.configuration.deferred_deletion_delay
-                else:
-                    try:
-                        self.RBDProxy().remove(client.ioctx, volume_name)
-                        return
-                    except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
-                        delay = 0
+            if clone_snap is not None:
+                # If the volume has copy-on-write clones, keep it as a silent
+                # volume which will be deleted when its snapshot and clones
+                # are deleted.
+                new_name = "%s.deleted" % (volume.name)
+                self.RBDProxy().rename(client.ioctx, volume.name, new_name)
+                return
 
-                self._flatten_children(client.ioctx, volume_name)
+            LOG.debug("deleting rbd volume %s", volume.name)
+            deleted = False
 
-                try:
-                    LOG.debug('Trying to remove image %(pool)s/%(img)s',
-                              dict(pool=_pool, img=volume_name))
-                    self.RBDProxy().remove(client.ioctx, volume_name)
-                    return
-                except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
-                    msg = (_("ImageBusy error raised while deleting "
-                             "rbd volume. This may have been caused by "
-                             "a connection from a client that has "
-                             "crashed and, if so, may be resolved by "
-                             "retrying the delete after 30 seconds has "
-                             "elapsed."))
-                    LOG.warning(msg)
-                    # Now raise this so that the volume stays available
-                    # and the deletion can be retried.
-                    raise exception.VolumeIsBusy(msg, volume_name=volume_name)
+            delay = 0
+            if self.configuration.enable_deferred_deletion:
+                delay = self.configuration.deferred_deletion_delay
+            try:
+                self.RBDProxy().remove(client.ioctx, volume.name)
+                return
+            except (self.rbd.ImageHasSnapshots, self.rbd.ImageBusy):
+                self._flatten_children(client.ioctx, volume.name)
+                pass
+            except self.rbd.ImageNotFound:
+                LOG.info("RBD volume %s not found, allowing delete "
+                         "operation to proceed.", volume.name)
+                return
 
-                LOG.debug("moving volume %s to trash", volume_name)
-                # When using the RBD v2 clone api, deleting a volume
-                # that has a snapshot in the trash space raises a
-                # busy exception.
-                # In order to solve this, call the trash operation
-                # which should succeed when the volume has
-                # dependencies.
-                self.RBDProxy().trash_move(client.ioctx,
-                                           volume_name,
-                                           delay)
+            try:
+                deleted = self._try_remove_volume(client, volume.name)
+            except self.rbd.ImageHasSnapshots:
+                msg = _('ImageHasSnapshots error while deleting volume')
+                raise exception.VolumeIsBusy(msg, volume_name=volume.name)
+            except self.rbd.ImageBusy:
+                msg = _('ImageBusy error raised while deleting rbd volume')
+                raise exception.VolumeIsBusy(msg, volume_name=volume.name)
 
-            if clone_snap is None:
-                LOG.debug("deleting rbd volume %s", volume_name)
-                try:
-                    _try_remove_volume(client, volume_name)
-                except self.rbd.ImageBusy:
-                    msg = (_("ImageBusy error raised while deleting rbd "
-                             "volume. This may have been caused by a "
-                             "connection from a client that has crashed and, "
-                             "if so, may be resolved by retrying the delete "
-                             "after 30 seconds has elapsed."))
-                    LOG.warning(msg)
-                    # Now raise this so that the volume stays available and the
-                    # deletion can be retried.
-                    raise exception.VolumeIsBusy(msg, volume_name=volume_name)
-                except self.rbd.ImageNotFound:
-                    LOG.info("RBD volume %s not found, allowing delete "
-                             "operation to proceed.", volume_name)
-                    return
+            if deleted:
+                return
 
-                # If it is a clone, walk back up the parent chain deleting
-                # references.
-                if parent:
-                    LOG.debug("volume is a clone so cleaning references")
-                    parent_snap = typing.cast(str, parent_snap)
-                    self._delete_clone_parent_refs(client, parent, parent_snap)
-            else:
-                # If the volume has copy-on-write clones we will not be able to
-                # delete it. Instead we will keep it as a silent volume which
-                # will be deleted when it's snapshot and clones are deleted.
-                new_name = "%s.deleted" % (volume_name)
-                self.RBDProxy().rename(client.ioctx, volume_name, new_name)
+            self._trash_volume(client.ioctx, volume.name, delay)
+
+            # If it is a clone, walk back up the parent chain deleting
+            # references.
+            if parent:
+                LOG.debug("volume is a clone so cleaning references")
+                parent_snap = typing.cast(str, parent_snap)
+                self._delete_clone_parent_refs(client, parent, parent_snap)
 
     def create_snapshot(self, snapshot: Snapshot) -> None:
         """Creates an rbd snapshot."""
