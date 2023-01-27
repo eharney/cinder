@@ -1,0 +1,7 @@
+---
+fixes:
+  - |
+    Generic NFS driver `bug #2007139
+    <https://bugs.launchpad.net/cinder/+bug/2007139>`_: Fixed
+    _copy_volume_from_snapshot method to enable cloning of encrypted NFS
+    volumes.

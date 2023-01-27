@@ -1533,13 +1533,14 @@ class RemoteFSSnapDriverBase(RemoteFSDriver):
                 with open(tmp_key.name, 'w') as f:
                     f.write(passphrase)
 
-                file_json_dict = {"driver": "qcow2",
-                                  "encrypt.key-secret": "s0",
+                LOG.debug('Creating snapshot %(snap)s from volume '
+                          '%(vol)s with encryption',
+                          {'snap': new_snap_path,
+                           'vol': backing_path_full_path})
+                file_json_dict = {"encrypt.key-secret": "s0",
                                   "backing.encrypt.key-secret": "s0",
                                   "backing.file.filename": volume_path,
-                                  "file": {"driver": "file",
-                                           "filename": backing_path_full_path,
-                                           }}
+                                  "file.filename": backing_path_full_path}
                 file_json = jsonutils.dumps(file_json_dict)
 
                 encryption = volume_utils.check_encryption_provider(
@@ -1555,6 +1556,7 @@ class RemoteFSSnapDriverBase(RemoteFSDriver):
                            'encrypt.cipher-mode=%(cipher_mode)s,'
                            'encrypt.ivgen-alg=%(ivgen_alg)s' % cipher_spec,
                            '-b', 'json:' + file_json,
+                           '-F', 'qcow2',
                            '--object', 'secret,id=s0,file=' + tmp_key.name,
                            '--object', 'secret,id=s1,file=' + tmp_key.name,
                            new_snap_path]

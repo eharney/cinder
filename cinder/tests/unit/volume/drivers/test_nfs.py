@@ -1374,6 +1374,13 @@ class NfsDriverTestCase(test.TestCase):
 
             src_encryption_key_id = src_volume.encryption_key_id
             dest_encryption_key_id = dest_volume.encryption_key_id
+
+            enc_info = {'encryption_key_id': key_id,
+                        'cipher': 'aes-xts-essiv',
+                        'key_size': 256,
+                        'provider': 'luks'}
+            self.mock_object(volume_utils, 'check_encryption_provider',
+                             return_value=enc_info)
         else:
             dest_volume = self._simple_volume()
             src_volume = self._simple_volume()
@@ -1433,6 +1440,22 @@ class NfsDriverTestCase(test.TestCase):
                 run_as_root=True,
                 src_passphrase_file='/tmp/imgfile',
                 data=bk_img_info)
+
+            encryption = 'encrypt.format=luks,encrypt.key-secret=s1,' \
+                'encrypt.cipher-alg=aes-256,encrypt.cipher-mode=xts,' \
+                'encrypt.ivgen-alg=essiv'
+
+            backingfile = 'encrypt.format=luks,encrypt.key-secret=s1,' \
+                'file.filename=%s,backing.encrypt.format=luks,' \
+                'backing.encrypt.key-secret=s0,backing.file.filename=%s'
+
+            drv._execute.assert_called_once_with(
+                'qemu-img', 'convert', '-O', 'qcow2', '-o',
+                encryption, '--image-opts',
+                backingfile % (snap_path, src_vol_path),
+                '--object', 'secret,id=s0,file=/tmp/imgfile',
+                '--object', 'secret,id=s1,file=/tmp/passfile',
+                dest_vol_path, run_as_root=True)
         else:
             mock_convert_image.assert_called_once_with(
                 src_vol_path, dest_vol_path, 'qcow2' if used_qcow else 'raw',

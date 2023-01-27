@@ -619,6 +619,53 @@ class NfsDriver(remotefs.RemoteFSSnapDriverDistributed):
 
         return self._delete_snapshot(snapshot)
 
+    def _get_volume_path(self, volume):
+        """Get the path to the volume."""
+
+        return self._local_path_volume(volume)
+
+    def _get_snap_back_path(self, snapshot):
+        """Get the path to the snapshot img and backing file img.
+
+        i.e:
+        A simple disk image chain:
+
+                        (Live QEMU)
+                                |
+                                |
+                                V
+
+        [A] <----------------- [B]
+
+        (backing file)        (overlay)
+
+        The arrow can be read as: Image [A] is the backing file of disk
+        image [B]. And live QEMU is currently writing to image [B],
+        consequently, it is also referred to as the “active layer”.
+        """
+
+        # Find the info file used to check the dependencies of the snapshots.
+        # i.e /path/to/<project-id>/volume-<uuid>.info
+        info_path = self._local_path_volume_info(snapshot.volume)
+
+        # dict with the snap full name and the active volume (active layer)
+        snap_info = self._read_info_file(info_path)
+
+        # Find the directory where the volumes are stored
+        # i.e /path/to/<project-id>/
+        dir_path = self._local_volume_dir(snapshot.volume)
+
+        # Find the path to the active layer
+        forward_file = snap_info[snapshot.id]
+        snapshot_img_forward_path = os.path.join(dir_path, forward_file)
+
+        # Find the path to the backing file
+        img_info = self._qemu_img_info(snapshot_img_forward_path,
+                                       snapshot.volume.name)
+        path_to_backing_img = os.path.join(dir_path, img_info.backing_file)
+
+        return snapshot_img_forward_path, path_to_backing_img
+
     def _copy_volume_from_snapshot(self, snapshot, volume, volume_size,
                                    src_encryption_key_id=None,
                                    new_encryption_key_id=None):
@@ -634,11 +681,8 @@ class NfsDriver(remotefs.RemoteFSSnapDriverDistributed):
                    'vol': volume.id,
                    'size': volume_size})
 
-        info_path = self._local_path_volume_info(snapshot.volume)
-        snap_info = self._read_info_file(info_path)
-        vol_path = self._local_volume_dir(snapshot.volume)
-        forward_file = snap_info[snapshot.id]
-        forward_path = os.path.join(vol_path, forward_file)
+        path_to_new_vol = self._get_volume_path(volume)
+        path_to_snap, path_to_backingfile = self._get_snap_back_path(snapshot)
 
         # Find the file which backs this file, which represents the point
         # when this snapshot was created.
@@ -664,43 +708,102 @@ class NfsDriver(remotefs.RemoteFSSnapDriverDistributed):
                 LOG.error(message)
                 # TODO(enriquetaso): handle unencrypted snap->encrypted vol
                 raise exception.NfsException(message)
-            keymgr = key_manager.API(CONF)
-            new_key = keymgr.get(volume.obj_context, new_encryption_key_id)
-            new_passphrase = \
-                binascii.hexlify(new_key.get_encoded()).decode('utf-8')
 
-            # volume.obj_context is the owner of this request
-            src_key = keymgr.get(volume.obj_context, src_encryption_key_id)
-            src_passphrase = \
-                binascii.hexlify(src_key.get_encoded()).decode('utf-8')
+            # Copy data from encrypted snapshot to encrypted volume
+            self._copy_volume_from_encrypted_snapshot(volume,
+                                                      src_encryption_key_id,
+                                                      new_encryption_key_id,
+                                                      path_to_backingfile,
+                                                      path_to_snap,
+                                                      path_to_new_vol)
 
-            tmp_dir = volume_utils.image_conversion_dir()
-            with tempfile.NamedTemporaryFile(prefix='luks_',
-                                             dir=tmp_dir) as src_pass_file:
-                with open(src_pass_file.name, 'w') as f:
-                    f.write(src_passphrase)
-
-                with tempfile.NamedTemporaryFile(prefix='luks_',
-                                                 dir=tmp_dir) as new_pass_file:
-                    with open(new_pass_file.name, 'w') as f:
-                        f.write(new_passphrase)
-
-                    image_utils.convert_image(
-                        path_to_snap_img,
-                        path_to_new_vol,
-                        'luks',
-                        passphrase_file=new_pass_file.name,
-                        src_passphrase_file=src_pass_file.name,
-                        run_as_root=self._execute_as_root,
-                        data=snap_backing_file_img_info)
         else:
-            image_utils.convert_image(path_to_snap_img,
+            image_utils.convert_image(path_to_backingfile,
                                       path_to_new_vol,
                                       out_format,
                                       run_as_root=self._execute_as_root,
                                       data=snap_backing_file_img_info)
 
         self._set_rw_permissions_for_all(path_to_new_vol)
+
+    def _copy_volume_from_encrypted_snapshot(self, volume,
+                                             src_encryption_key_id,
+                                             new_encryption_key_id,
+                                             path_to_backingfile,
+                                             path_to_snap_img,
+                                             path_to_new_vol):
+        """Copy data from encrypted snapshot to encrypted volume.
+
+        This is done with a qemu-img convert.
+
+        Because of how NFS encryption works, it is necessary to
+        specify the source volume that backs the qcow2 snapshot
+        (as a backing file) and encrypt the destination volume with
+        a new key.
+
+        :param volume: volume object
+        :param src_encryption_key_id: snapshot and source volume
+        encryption key id
+        :param new_encryption_key_id: new volume encryption key id
+        :param path_to_backingfile: path to the source volume file
+        :param path_to_snap_img: path to the snapshot file
+        :param path_to_new_vol: path to the destination volume file
+        """
+        LOG.debug("Copying encrypted snapshot: %(snap)s "
+                  "-> encrypted volume: %(vol)s",
+                  {'snap': path_to_snap_img,
+                   'vol': path_to_new_vol})
+
+        keymgr = key_manager.API(CONF)
+        new_key = keymgr.get(volume.obj_context, new_encryption_key_id)
+        new_passphrase = \
+            binascii.hexlify(new_key.get_encoded()).decode('utf-8')
+
+        # volume.obj_context is the owner of this request
+        src_key = keymgr.get(volume.obj_context, src_encryption_key_id)
+        src_passphrase = \
+            binascii.hexlify(src_key.get_encoded()).decode('utf-8')
+
+        tmp_dir = volume_utils.image_conversion_dir()
+        with tempfile.NamedTemporaryFile(prefix='luks_',
+                                         dir=tmp_dir) as src_pass_file:
+            with open(src_pass_file.name, 'w') as f:
+                f.write(src_passphrase)
+
+            with tempfile.NamedTemporaryFile(prefix='luks_',
+                                             dir=tmp_dir) as new_pass_file:
+                with open(new_pass_file.name, 'w') as f:
+                    f.write(new_passphrase)
+
+                encryption = volume_utils.check_encryption_provider(
+                    volume=volume,
+                    context=volume.obj_context)
+
+                cipher_spec = image_utils.decode_cipher(encryption['cipher'],
+                                                        encryption['key_size'])
+                opts = {'path_snap': path_to_snap_img,
+                        'backingfile': path_to_backingfile}
+                old_key = src_pass_file.name
+                new_key = new_pass_file.name
+
+                command = ['qemu-img', 'convert',
+                           '-O', 'qcow2',
+                           '-o', 'encrypt.format=luks,encrypt.key-secret=s1,'
+                           'encrypt.cipher-alg=%(cipher_alg)s,'
+                           'encrypt.cipher-mode=%(cipher_mode)s,'
+                           'encrypt.ivgen-alg=%(ivgen_alg)s' % cipher_spec,
+                           '--image-opts',
+                           'encrypt.format=luks,'
+                           'encrypt.key-secret=s1,'
+                           'file.filename=%(path_snap)s,'
+                           'backing.encrypt.format=luks,'
+                           'backing.encrypt.key-secret=s0,'
+                           'backing.file.filename=%(backingfile)s' % opts,
+                           '--object', 'secret,id=s0,file=' + old_key,
+                           '--object', 'secret,id=s1,file=' + new_key,
+                           path_to_new_vol,
+                           ]
+                self._execute(*command, run_as_root=self._execute_as_root)
 
     def copy_image_to_encrypted_volume(self, context, volume, image_service,
                                        image_id):
