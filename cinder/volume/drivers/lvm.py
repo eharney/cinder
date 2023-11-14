@@ -71,6 +71,10 @@ volume_opts = [
                 default=False,
                 help='Whether to share the same target for all LUNs or not '
                      '(currently only supported by nvmet.'),
+    cfg.BoolOpt('lvm_local',
+                default=False,
+                help='Expose local LVM devices directly w/o an iSCSI '
+                     'target.'),
 ]
 
 CONF = cfg.CONF
@@ -107,12 +111,17 @@ class LVMVolumeDriver(driver.VolumeDriver):
                   'following target_driver: %s',
                   target_driver)
 
-        self.target_driver = importutils.import_object(
-            target_driver,
-            configuration=self.configuration,
-            executor=self._execute)
-        self.protocol = (self.target_driver.storage_protocol or
-                         self.target_driver.protocol)
+        if self.configuration.lvm_local:
+            self.protocol = 'local'
+            self.target_driver = None
+            # TODO: force thin mode for local
+        else:
+            self.target_driver = importutils.import_object(
+                target_driver,
+                configuration=self.configuration,
+                executor=self._execute)
+            self.protocol = (self.target_driver.storage_protocol or
+                             self.target_driver.protocol)
         if (self.configuration.lvm_share_target
                 and not self.target_driver.SHARED_TARGET_SUPPORT):
             raise exception.InvalidConfigurationValue(
@@ -843,6 +852,10 @@ class LVMVolumeDriver(driver.VolumeDriver):
 
         self.vg.activate_lv(volume['name'])
 
+        if self.configuration.lvm_local is True:
+            return {'provider_location': volume_path,
+                    'protocol': 'local'}
+
         export_info = self.target_driver.create_export(
             context,
             volume,
@@ -854,9 +867,21 @@ class LVMVolumeDriver(driver.VolumeDriver):
         self.target_driver.remove_export(context, volume)
 
     def initialize_connection(self, volume, connector):
+        LOG.debug("connector in initialize_connection: %s", connector)
+        if self.configuration.lvm_local is True:
+            # generate device_path for this volume
+            volume_path = '/dev/%s/%s' % (self.configuration.volume_group,
+                                          volume.name)
+            connector['device_path'] = volume_path
+
+            return {'driver_volume_type': 'local',
+                    'data': connector}
+
         return self.target_driver.initialize_connection(volume, connector)
 
     def validate_connector(self, connector):
+        if self.target_driver is None:
+            return
         return self.target_driver.validate_connector(connector)
 
     def terminate_connection(self, volume, connector, **kwargs):
@@ -875,6 +900,9 @@ class LVMVolumeDriver(driver.VolumeDriver):
             return (attach.connector
                     and self.target_driver.are_same_connector(attach.connector,
                                                               connector))
+
+        if self.target_driver is None:
+            return False
 
         attachments = volume.volume_attachment
         if (volume.multiattach

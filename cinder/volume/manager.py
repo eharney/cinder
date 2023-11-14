@@ -1864,6 +1864,10 @@ class VolumeManager(manager.CleanableManager,
                         specs.pop(option_per_gb)
 
         qos_spec = dict(qos_specs=specs)
+        if 'data' not in conn_info:
+            raise exception.InvalidInput(
+                    reason='missing data field in connector')
+
         conn_info['data'].update(qos_spec)
 
         # Add access_mode to connection info
