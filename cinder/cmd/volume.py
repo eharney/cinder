@@ -22,34 +22,43 @@ import re
 import shlex
 import sys
 
-import eventlet
-import eventlet.tpool
-# Monkey patching must go before the oslo.log import, otherwise
-# oslo.context will not use greenthread thread local and all greenthreads
-# will share the same context.
-if os.name == 'nt':
-    # eventlet monkey patching the os module causes subprocess.Popen to fail
-    # on Windows when using pipes due to missing non-blocking IO support.
-    eventlet.monkey_patch(os=False)
-else:
-    eventlet.monkey_patch()
-# Monkey patch the original current_thread to use the up-to-date _active
-# global variable. See https://bugs.launchpad.net/bugs/1863021 and
-# https://github.com/eventlet/eventlet/issues/592
-import __original_module_threading as orig_threading  # pylint: disable=E0401
-import threading # noqa
-orig_threading.current_thread.__globals__['_active'] = \
-    threading._active  # type: ignore
+using_threading = True
+
+if not using_threading:
+    import eventlet
+    import eventlet.tpool
+    # Monkey patching must go before the oslo.log import, otherwise
+    # oslo.context will not use greenthread thread local and all greenthreads
+    # will share the same context.
+    if os.name == 'nt':
+        # eventlet monkey patching the os module causes subprocess.Popen to fail
+        # on Windows when using pipes due to missing non-blocking IO support.
+        eventlet.monkey_patch(os=False)
+    else:
+        eventlet.monkey_patch()
+    # Monkey patch the original current_thread to use the up-to-date _active
+    # global variable. See https://bugs.launchpad.net/bugs/1863021 and
+    # https://github.com/eventlet/eventlet/issues/592
+    import __original_module_threading as orig_threading  # pylint: disable=E0401
+    import threading # noqa
+    orig_threading.current_thread.__globals__['_active'] = \
+        threading._active  # type: ignore
+
 import typing
 
-import os_brick
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_privsep import priv_context
 from oslo_reports import guru_meditation_report as gmr
 from oslo_reports import opts as gmr_opts
-if typing.TYPE_CHECKING:
-    import oslo_service
+import oslo_service
+import oslo_service.backend
+
+
+if using_threading:
+    oslo_service.backend.init_backend(oslo_service.backend.BackendType.THREADING)
+
+import os_brick
 
 # Need to register global_opts
 from cinder.common import config  # noqa
@@ -177,6 +186,12 @@ def _launch_services_posix() -> None:
 
     launcher.wait()
 
+def setup_eventlet():
+    if using_threading:
+        pass
+    else:
+        utils.monkey_patch()
+
 
 def main() -> None:
     objects.register_all()
@@ -186,7 +201,7 @@ def main() -> None:
     logging.setup(CONF, "cinder")
     python_logging.captureWarnings(True)
     priv_context.init(root_helper=shlex.split(utils.get_root_helper()))
-    utils.monkey_patch()
+    setup_eventlet()
     gmr.TextGuruMeditation.setup_autorun(version, conf=CONF)
     os_brick.setup(CONF)
     global LOG
