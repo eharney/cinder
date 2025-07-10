@@ -31,6 +31,7 @@ from oslo_config import cfg
 from oslo_db import exception as db_exc
 from oslo_log import log as logging
 import oslo_messaging as messaging
+import oslo_service
 from oslo_service import service
 from oslo_service import wsgi
 from oslo_utils import importutils
@@ -141,6 +142,10 @@ class Service(service.Service):
                  cluster: Optional[str] = None,
                  *args, **kwargs):
         super(Service, self).__init__()
+
+
+        LOG.debug("Enabling threading backend.")
+        oslo_service.backend.init_backend(oslo_service.backend.BackendType.THREADING)
 
         if not rpc.initialized():
             rpc.init(CONF)
@@ -279,17 +284,15 @@ class Service(service.Service):
         self.manager.init_host_with_rpc()
 
         if self.report_interval:
-            self.tg.add_timer(self.report_interval, self.report_state,
-                              initial_delay=self.report_interval)
+            self.tg.add_timer(self.report_interval, self.report_state)
 
         if self.periodic_interval:
-            initial_delay: Optional[int]
-            if self.periodic_fuzzy_delay:
-                initial_delay = random.randint(0, self.periodic_fuzzy_delay)
-            else:
-                initial_delay = None
-            self.tg.add_timer(self.periodic_interval, self.periodic_tasks,
-                              initial_delay=initial_delay)
+            #initial_delay: Optional[int]
+            #if self.periodic_fuzzy_delay:
+            #    initial_delay = random.randint(0, self.periodic_fuzzy_delay)
+            #else:
+            #    initial_delay = None
+            self.tg.add_timer(self.periodic_interval, self.periodic_tasks)
 
     def basic_config_check(self) -> None:
         """Perform basic config checks before starting service."""
