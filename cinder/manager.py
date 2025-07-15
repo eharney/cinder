@@ -51,6 +51,9 @@ This module provides Manager, a base class for managers.
 
 """
 
+import os
+import threading
+
 from eventlet import greenpool
 from eventlet import tpool
 from oslo_config import cfg
@@ -96,9 +99,24 @@ class Manager(base.Base, PeriodicTasks):
         self.cluster = cluster
         self.additional_endpoints: list = []
         self.availability_zone = CONF.storage_availability_zone
+        self.eventlet_enabled: bool = not self.is_threading_enabled()
+
         super().__init__()
 
+    @staticmethod
+    def is_threading_enabled() -> bool:
+        # TODO: deduplicate this function
+        env = os.environ.get('OS_CINDER_DISABLE_EVENTLET_PATCHING', '').lower()
+        match env:
+            case ('1' | 'true' | 'yes'):
+                return True
+            case _:
+                return False
+
     def _set_tpool_size(self, nthreads: int) -> None:
+        if not self.eventlet_enabled:
+            return
+
         # NOTE(geguileo): Until PR #472 is merged we have to be very careful
         # not to call "tpool.execute" before calling this method.
         tpool.set_num_threads(nthreads)
@@ -162,11 +180,22 @@ class Manager(base.Base, PeriodicTasks):
 
 class ThreadPoolManager(Manager):
     def __init__(self, *args, **kwargs):
-        self._tp = greenpool.GreenPool()
+        self._tp = None
+
         super(ThreadPoolManager, self).__init__(*args, **kwargs)
 
-    def _add_to_threadpool(self, func, *args, **kwargs):
-        self._tp.spawn_n(func, *args, **kwargs)
+        if self.eventlet_enabled:
+            self._tp = greenpool.GreenPool()
+
+    def _add_to_threadpool(self, func, *args, **kwargs) -> None:
+        if self.eventlet_enabled:
+            assert self._tp is not None
+            self._tp.spawn_n(func, *args, **kwargs)
+            return
+
+        LOG.debug("Creating thread for %s", func)
+        t = threading.Thread(target=func, args=args, kwargs=kwargs)
+        t.start()
 
 
 class SchedulerDependentManager(ThreadPoolManager):
