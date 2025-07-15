@@ -12,6 +12,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import time
+
 from oslo_utils import timeutils
 
 from cinder import exception
@@ -223,6 +225,80 @@ class FakeLoggingVolumeDriver(lvm.LVMVolumeDriver):
     def fake_execute(cmd, *_args, **_kwargs):
         """Execute that simply logs the command."""
         return (None, None)
+
+class SlowFakeLoggingVolumeDriver(FakeLoggingVolumeDriver):
+    """Logs calls instead of executing."""
+    def __init__(self, *args, **kwargs):
+        super(SlowFakeLoggingVolumeDriver, self).__init__(
+            execute=self.fake_execute, *args, **kwargs)
+
+        self.backend_name = 'fake'
+        self.protocol = 'fake'
+        self.vg = fake_lvm.FakeBrickLVM('cinder-volumes', False,
+                                        None, 'default',
+                                        self.fake_execute)
+
+    @volume_utils.trace_method
+    def check_for_setup_error(self):
+        """No setup necessary in fake mode."""
+        pass
+
+    @volume_utils.trace_method
+    def create_volume(self, volume):
+        """Creates a volume."""
+        super(FakeLoggingVolumeDriver, self).create_volume(volume)
+        time.sleep(30)
+
+        model_update = {}
+        try:
+            if (volume.volume_type and volume.volume_type.extra_specs and
+                    volume_utils.is_replicated_spec(
+                        volume.volume_type.extra_specs)):
+                # Sets the new volume's replication_status to disabled
+                model_update['replication_status'] = (
+                    fields.ReplicationStatus.DISABLED)
+        except exception.VolumeTypeNotFound:
+            pass
+        if model_update:
+            return model_update
+
+    @volume_utils.trace_method
+    def delete_volume(self, volume):
+        time.sleep(10)
+        pass
+
+    @volume_utils.trace_method
+    def create_snapshot(self, snapshot):
+        time.sleep(30)
+        pass
+
+    @volume_utils.trace_method
+    def delete_snapshot(self, snapshot):
+        time.sleep(5)
+        pass
+
+    def _update_volume_stats(self):
+        time.sleep(5)
+        data = {'volume_backend_name': self.backend_name,
+                'vendor_name': 'Open Source',
+                'driver_version': self.VERSION,
+                'storage_protocol': self.protocol,
+                'pools': []}
+
+        fake_pool = {'pool_name': data['volume_backend_name'],
+                     'total_capacity_gb': 'infinite',
+                     'free_capacity_gb': 'infinite',
+                     'provisioned_capacity_gb': 0,
+                     'reserved_percentage': 100,
+                     'QoS_support': False,
+                     'filter_function': self.get_filter_function(),
+                     'goodness_function': self.get_goodness_function(),
+                     'consistencygroup_support': False,
+                     'replication_enabled': True,
+                     'group_replication_enabled': True, }
+
+        data['pools'].append(fake_pool)
+        self._stats = data
 
 
 class FakeISERDriver(FakeLoggingVolumeDriver):
