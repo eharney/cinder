@@ -36,6 +36,7 @@ intact.
 """
 
 import functools
+import threading
 import time
 import typing
 from typing import Any, Optional, Union
@@ -363,6 +364,8 @@ class VolumeManager(manager.CleanableManager,
             LOG.info('Image-volume cache disabled for host %(host)s.',
                      {'host': self.host})
             self.image_volume_cache = None
+
+        self._thread_info()
 
     def _count_allocated_capacity(self, ctxt: context.RequestContext,
                                   volume: objects.Volume) -> None:
@@ -5433,3 +5436,9 @@ class VolumeManager(manager.CleanableManager,
                         resource_uuid=volume.id,
                         detail=
                         message_field.Detail.IMAGE_FORMAT_UNACCEPTABLE)
+
+    @periodic_task.periodic_task(spacing=5)
+    def _thread_info(self) -> None:
+        LOG.debug("thread count: %s" % threading.active_count())
+        LOG.debug("thread info: %s" % threading.enumerate())
+
