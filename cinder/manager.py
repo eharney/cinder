@@ -51,6 +51,8 @@ This module provides Manager, a base class for managers.
 
 """
 
+import threading
+
 from eventlet import greenpool
 from eventlet import tpool
 from oslo_config import cfg
@@ -101,7 +103,7 @@ class Manager(base.Base, PeriodicTasks):
     def _set_tpool_size(self, nthreads: int) -> None:
         # NOTE(geguileo): Until PR #472 is merged we have to be very careful
         # not to call "tpool.execute" before calling this method.
-        tpool.set_num_threads(nthreads)
+        tpool.set_num_threads(nthreads)  # eventlet
 
     @property
     def service_topic_queue(self):
@@ -160,13 +162,20 @@ class Manager(base.Base, PeriodicTasks):
         return objects.LogLevelList(context, objects=log_levels)
 
 
-class ThreadPoolManager(Manager):
+class EventletThreadPoolManager(Manager):
     def __init__(self, *args, **kwargs):
         self._tp = greenpool.GreenPool()
         super(ThreadPoolManager, self).__init__(*args, **kwargs)
 
     def _add_to_threadpool(self, func, *args, **kwargs):
         self._tp.spawn_n(func, *args, **kwargs)
+
+
+class ThreadPoolManager(Manager):
+    def _add_to_threadpool(self, func, *args, **kwargs) -> None:
+        LOG.debug("Creating thread for %s", func)
+        t = threading.Thread(target=func, args=args, kwargs=kwargs)
+        t.start()
 
 
 class SchedulerDependentManager(ThreadPoolManager):
