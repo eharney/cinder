@@ -20,20 +20,29 @@
 import logging as python_logging
 import sys
 
-import eventlet
-eventlet.monkey_patch()
-# Monkey patch the original current_thread to use the up-to-date _active
-# global variable. See https://bugs.launchpad.net/bugs/1863021 and
-# https://github.com/eventlet/eventlet/issues/592
-import __original_module_threading as orig_threading  # pylint: disable=E0401
-import threading # noqa
-orig_threading.current_thread.__globals__['_active'] = \
-    threading._active  # type: ignore
+using_threading = True
+
+if not using_threading:
+    import eventlet
+    eventlet.monkey_patch()
+    # Monkey patch the original current_thread to use the up-to-date _active
+    # global variable. See https://bugs.launchpad.net/bugs/1863021 and
+    # https://github.com/eventlet/eventlet/issues/592
+    import __original_module_threading as orig_threading  # pylint: disable=E0401
+    import threading # noqa
+    orig_threading.current_thread.__globals__['_active'] = \
+        threading._active  # type: ignore
 
 from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_reports import guru_meditation_report as gmr
 from oslo_reports import opts as gmr_opts
+import oslo_service
+import oslo_service.backend
+
+if using_threading:
+    oslo_service.backend.init_backend(
+            oslo_service.backend.BackendType.THREADING)
 
 # Need to register global_opts
 from cinder.common import config  # noqa
@@ -55,7 +64,8 @@ def main() -> None:
          version=version.version_string())
     logging.setup(CONF, "cinder")
     python_logging.captureWarnings(True)
-    utils.monkey_patch()
+    if not using_threading:
+        utils.monkey_patch()
     gmr.TextGuruMeditation.setup_autorun(version, conf=CONF)
     server = service.Service.create(binary='cinder-scheduler')
     service.serve(server)
