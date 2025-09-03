@@ -26,4 +26,5 @@ class Base(object):
         super().__init__()
 
         self.db = cinder.db
-        self.db.dispose_engine()
+        #self.db.dispose_engine()   # this fails in multi-backend
+

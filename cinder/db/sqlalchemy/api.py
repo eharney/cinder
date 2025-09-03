@@ -41,6 +41,7 @@ import functools
 import itertools
 import re
 import sys
+import threading
 import uuid
 
 from oslo_config import cfg
@@ -84,7 +85,11 @@ ATTACH_STATUS_MAP = {'attached': 'in-use', 'detached': 'available'}
 
 options.set_defaults(CONF, connection='sqlite:///$state_path/cinder.sqlite')
 
-main_context_manager = enginefacade.transaction_context()
+
+tlcm = threading.local()
+tlcm.main_context_manager = enginefacade.transaction_context()
+
+main_context_manager = tlcm.main_context_manager
 
 
 def get_engine():

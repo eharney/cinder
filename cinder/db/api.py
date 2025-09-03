@@ -33,6 +33,8 @@ these objects be simple dictionaries.
     pool of available hardware (Default: True)
 """
 
+import threading
+
 from oslo_config import cfg
 from oslo_db import api as oslo_db_api
 from oslo_db import options as db_options
@@ -67,6 +69,13 @@ db_options.set_defaults(CONF)
 _BACKEND_MAPPING = {'sqlalchemy': 'cinder.db.sqlalchemy.api'}
 
 
+"""
+tlimpl = threading.local()
+tlimpl.IMPL = oslo_db_api.DBAPI.from_config(conf=CONF,
+                                     backend_mapping=_BACKEND_MAPPING,
+                                     lazy=True)
+IMPL = tlimpl.IMPL
+"""
 IMPL = oslo_db_api.DBAPI.from_config(conf=CONF,
                                      backend_mapping=_BACKEND_MAPPING,
                                      lazy=True)

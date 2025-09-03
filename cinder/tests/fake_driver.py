@@ -230,7 +230,7 @@ class SlowFakeLoggingVolumeDriver(FakeLoggingVolumeDriver):
     """Logs calls instead of executing."""
     def __init__(self, *args, **kwargs):
         super(SlowFakeLoggingVolumeDriver, self).__init__(
-            execute=self.fake_execute, *args, **kwargs)
+            *args, **kwargs)
 
         self.backend_name = 'fake'
         self.protocol = 'fake'

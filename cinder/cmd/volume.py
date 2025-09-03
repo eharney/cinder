@@ -21,6 +21,7 @@ import os
 import re
 import shlex
 import sys
+import threading
 
 using_threading = True
 
@@ -56,7 +57,8 @@ import oslo_service.backend
 
 
 if using_threading:
-    oslo_service.backend.init_backend(oslo_service.backend.BackendType.THREADING)
+    oslo_service.backend.init_backend(
+            oslo_service.backend.BackendType.THREADING)
 
 import os_brick
 
@@ -110,6 +112,7 @@ def _launch_service(launcher: 'oslo_service.ProcessLauncher',
     # ignore leading and trailing spaces.
     cluster = CONF.cluster and CONF.cluster.strip()
     cluster = (cluster or None) and '%s@%s' % (cluster, backend)
+    #session.dispose_engine()  # get a new one for each thread - (does not work)
     try:
         server = service.Service.create(host=host,
                                         service_name=backend,
@@ -181,6 +184,8 @@ def _launch_services_posix() -> None:
     backend: str
     for backend in filter(None, CONF.enabled_backends):
         _launch_service(launcher, backend)
+        t = threading.Thread(target=_launch_service, args=(launcher, backend))
+        t.start()
 
     _ensure_service_started()
 
