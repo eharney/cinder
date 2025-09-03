@@ -20,6 +20,7 @@ import json
 import math
 import os
 import tempfile
+import time
 import typing
 from typing import Any, Optional, Union
 import urllib.parse
@@ -233,7 +234,6 @@ class RBDVolumeProxy(object):
                                            name,
                                            snapshot=snapshot,
                                            read_only=read_only)
-            self.volume = tpool.Proxy(self.volume)
         except driver.rbd.Error:
             if self._close_conn:
                 driver._disconnect_from_rados(rados_client, rados_ioctx)
@@ -563,8 +563,8 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
 
         self._start_periodic_tasks()
 
-    def RBDProxy(self) -> tpool.Proxy:
-        return tpool.Proxy(self.rbd.RBD())
+    def RBDProxy(self):
+        return self.rbd.RBD()
 
     def _ceph_args(self) -> list[str]:
         args = []
@@ -608,7 +608,6 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
             client = self.rados.Rados(rados_id=user,
                                       clustername=name,
                                       conffile=conf)
-            client = tpool.Proxy(client)
 
             try:
                 if timeout >= 0:
@@ -631,6 +630,7 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
     @staticmethod
     def _disconnect_from_rados(client: 'rados.Rados',
                                ioctx: 'rados.Ioctx') -> None:
+        LOG.debug("_disconnect_from_rados")
         # closing an ioctx cannot raise an exception
         ioctx.close()
         client.shutdown()
@@ -1150,6 +1150,8 @@ class RBDDriver(driver.CloneableImageVD, driver.MigrateVD,
 
     def create_volume(self, volume: Volume) -> dict[str, Any]:
         """Creates a logical volume."""
+
+        time.sleep(10) # for testing
 
         if volume.encryption_key_id:
             self._create_encrypted_volume(volume, volume.obj_context)
