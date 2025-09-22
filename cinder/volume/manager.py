@@ -38,7 +38,7 @@ intact.
 import functools
 import time
 import typing
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
 
 from castellan import key_manager
 from oslo_config import cfg
@@ -193,9 +193,10 @@ MAPPING = {
 }
 
 
-def clean_volume_locks(func):
+def clean_volume_locks(func: Callable) -> Callable:
     @functools.wraps(func)
-    def wrapper(self, context, volume, *args, **kwargs):
+    def wrapper(self, context: context.RequestContext,
+                volume: objects.Volume, *args, **kwargs) -> Any:
         skip_clean = False
         try:
             skip_clean = func(self, context, volume, *args, **kwargs)
@@ -211,9 +212,10 @@ def clean_volume_locks(func):
     return wrapper
 
 
-def clean_snapshot_locks(func):
+def clean_snapshot_locks(func: Callable) -> Callable:
     @functools.wraps(func)
-    def wrapper(self, context, snapshot, *args, **kwargs):
+    def wrapper(self, context: context.RequestContext,
+                snapshot: objects.Snapshot, *args, **kwargs) -> Any:
         skip_clean = False
         try:
             skip_clean = func(self, context, snapshot, *args, **kwargs)
@@ -424,7 +426,8 @@ class VolumeManager(manager.CleanableManager,
             LOG.info("Determined volume DB was not empty at startup.")
             return False
 
-    def _sync_provider_info(self, ctxt, volumes, snapshots) -> None:
+    def _sync_provider_info(self, ctxt: context.RequestContext,
+                            volumes: list, snapshots: list) -> None:
         # NOTE(jdg): For now this just updates provider_id, we can add more
         # items to the update if they're relevant but we need to be safe in
         # what we allow and add a list of allowed keys.  Things that make sense
@@ -460,7 +463,8 @@ class VolumeManager(manager.CleanableManager,
                             update['id'],
                             {'provider_id': update['provider_id']})
 
-    def _include_resources_in_cluster(self, ctxt) -> None:
+    def _include_resources_in_cluster(
+            self, ctxt: context.RequestContext) -> None:
 
         LOG.info('Including all resources from host %(host)s in cluster '
                  '%(cluster)s.',
@@ -508,7 +512,8 @@ class VolumeManager(manager.CleanableManager,
                     return
                 reinit_count += 1
 
-    def _init_host(self, added_to_cluster=None, **kwargs) -> None:
+    def _init_host(self, added_to_cluster: Optional[bool] = None,
+                   **kwargs) -> None:
         ctxt = context.get_admin_context()
 
         # If we have just added this host to a cluster we have to include all
@@ -743,9 +748,11 @@ class VolumeManager(manager.CleanableManager,
             resource.save()
 
     @objects.Volume.set_workers
-    def create_volume(self, context, volume, request_spec=None,
-                      filter_properties=None,
-                      allow_reschedule=True) -> ovo_fields.UUIDField:
+    def create_volume(self, context: context.RequestContext,
+                      volume: objects.Volume,
+                      request_spec: Optional[objects.RequestSpec] = None,
+                      filter_properties: Optional[dict] = None,
+                      allow_reschedule: bool = True) -> ovo_fields.UUIDField:
         """Creates the volume."""
         # Log about unsupported drivers
         volume_utils.log_unsupported_driver_warning(self.driver)
@@ -856,7 +863,7 @@ class VolumeManager(manager.CleanableManager,
         LOG.info("Created volume successfully.", resource=volume)
         return volume.id
 
-    def _driver_shares_targets(self):
+    def _driver_shares_targets(self) -> Optional[bool]:
         """Report if driver shares targets and needs locking on connecing side.
 
         This is currently only relevant for iSCSI and for NVMe-oF.
@@ -900,7 +907,8 @@ class VolumeManager(manager.CleanableManager,
         # Only iSCSI drivers would need to do locking for shared targets
         return protocol in constants.ISCSI_VARIANTS
 
-    def _check_is_our_resource(self, resource) -> None:
+    def _check_is_our_resource(
+            self, resource: Union[objects.Volume, objects.Group]) -> None:
         if resource.host:
             res_backend = volume_utils.extract_host(
                 resource.service_topic_queue)
@@ -912,14 +920,14 @@ class VolumeManager(manager.CleanableManager,
                         'backend': backend})
                 raise exception.Invalid(msg)
 
-    def driver_delete_volume(self, volume):
+    def driver_delete_volume(self, volume: objects.Volume) -> None:
         self.driver.delete_volume(volume)
         # Most TooZ drivers clean after themselves (like etcd3), so we don't
         # worry about those locks, only about TooZ file locks that are the same
         # as oslo's.
         utils.clean_volume_file_locks(volume.id, self.driver)
 
-    def driver_delete_snapshot(self, snapshot):
+    def driver_delete_snapshot(self, snapshot: objects.Snapshot) -> None:
         self.driver.delete_snapshot(snapshot)
         utils.clean_snapshot_file_locks(snapshot.id, self.driver)
 
@@ -1067,7 +1075,7 @@ class VolumeManager(manager.CleanableManager,
         LOG.info(msg, resource=volume)
         return None
 
-    def _clear_db(self, volume_ref, status) -> None:
+    def _clear_db(self, volume_ref: objects.Volume, status: str) -> None:
         # This method is called when driver.unmanage() or
         # driver.delete_volume() fails in delete_volume(), so it is already
         # in the exception handling part.
@@ -1082,8 +1090,8 @@ class VolumeManager(manager.CleanableManager,
 
     def _revert_to_snapshot_generic(self,
                                     ctxt: context.RequestContext,
-                                    volume,
-                                    snapshot) -> None:
+                                    volume: objects.Volume,
+                                    snapshot: objects.Snapshot) -> None:
         """Generic way to revert volume to a snapshot.
 
         the framework will use the generic way to implement the revert
@@ -1117,7 +1125,9 @@ class VolumeManager(manager.CleanableManager,
                     self.driver_delete_volume(temp_vol)
                     temp_vol.destroy()
 
-    def _revert_to_snapshot(self, context, volume, snapshot) -> None:
+    def _revert_to_snapshot(self, context: context.RequestContext,
+                            volume: objects.Volume,
+                            snapshot: objects.Snapshot) -> None:
         """Use driver or generic method to rollback volume."""
 
         try:
@@ -1127,7 +1137,8 @@ class VolumeManager(manager.CleanableManager,
                      "Try to use copy-snapshot-to-volume method.")
             self._revert_to_snapshot_generic(context, volume, snapshot)
 
-    def _create_backup_snapshot(self, context, volume) -> objects.Snapshot:
+    def _create_backup_snapshot(self, context: context.RequestContext,
+                                volume: objects.Volume) -> objects.Snapshot:
         kwargs = {
             'volume_id': volume.id,
             'user_id': context.user_id,
@@ -1150,7 +1161,9 @@ class VolumeManager(manager.CleanableManager,
         self.create_snapshot(context, snapshot)
         return snapshot
 
-    def revert_to_snapshot(self, context, volume, snapshot) -> None:
+    def revert_to_snapshot(self, context: context.RequestContext,
+                           volume: objects.Volume,
+                           snapshot: objects.Snapshot) -> None:
         """Revert a volume to a snapshot.
 
         The process of reverting to snapshot consists of several steps:
@@ -1237,7 +1250,8 @@ class VolumeManager(manager.CleanableManager,
         self._notify_about_snapshot_usage(context, snapshot, "revert.end")
 
     @objects.Snapshot.set_workers
-    def create_snapshot(self, context, snapshot) -> ovo_fields.UUIDField:
+    def create_snapshot(self, context: context.RequestContext,
+                        snapshot: objects.Snapshot) -> ovo_fields.UUIDField:
         """Creates and exports the snapshot."""
         context = context.elevated()
 
@@ -1396,9 +1410,11 @@ class VolumeManager(manager.CleanableManager,
         return None
 
     @coordination.synchronized('{volume_id}')
-    def attach_volume(self, context, volume_id, instance_uuid, host_name,
-                      mountpoint, mode,
-                      volume=None) -> objects.VolumeAttachment:
+    def attach_volume(self, context: context.RequestContext,
+                      volume_id: str, instance_uuid: Optional[str],
+                      host_name: Optional[str], mountpoint: str, mode: str,
+                      volume: Optional[objects.Volume] = None
+                      ) -> objects.VolumeAttachment:
         """Updates db to show volume is attached."""
         # FIXME(lixiaoy1): Remove this in v4.0 of RPC API.
         if volume is None:
@@ -1485,8 +1501,9 @@ class VolumeManager(manager.CleanableManager,
         return attachment
 
     @coordination.synchronized('{volume_id}-{f_name}')
-    def detach_volume(self, context, volume_id, attachment_id=None,
-                      volume=None) -> None:
+    def detach_volume(self, context: context.RequestContext,
+                      volume_id: str, attachment_id: Optional[str] = None,
+                      volume: Optional[objects.Volume] = None) -> None:
         """Updates db to show volume is detached."""
         # TODO(vish): refactor this into a more general "unreserve"
         # FIXME(lixiaoy1): Remove this in v4.0 of RPC API.
@@ -1573,8 +1590,9 @@ class VolumeManager(manager.CleanableManager,
         self._notify_about_volume_usage(context, volume, "detach.end")
         LOG.info("Detach volume completed successfully.", resource=volume)
 
-    def _create_image_cache_volume_entry(self, ctx, volume_ref,
-                                         image_id, image_meta) -> None:
+    def _create_image_cache_volume_entry(
+            self, ctx: context.RequestContext, volume_ref: objects.Volume,
+            image_id: str, image_meta: dict) -> None:
         """Create a new image-volume and cache entry for it.
 
         This assumes that the image has already been downloaded and stored
@@ -1623,7 +1641,7 @@ class VolumeManager(manager.CleanableManager,
 
     def _clone_image_volume(self,
                             ctx: context.RequestContext,
-                            volume,
+                            volume: objects.Volume,
                             image_meta: dict) -> Optional[objects.Volume]:
         # TODO: should this return None?
         volume_type_id: str = volume.get('volume_type_id')
@@ -1802,7 +1820,8 @@ class VolumeManager(manager.CleanableManager,
         LOG.info("Copy volume to image completed successfully.",
                  resource=volume)
 
-    def _delete_image(self, context, image_id, image_service) -> None:
+    def _delete_image(self, context: context.RequestContext,
+                      image_id: str, image_service: Any) -> None:
         """Deletes an image stuck in queued or saving state."""
         try:
             image_meta = image_service.show(context, image_id)
@@ -2091,7 +2110,8 @@ class VolumeManager(manager.CleanableManager,
         LOG.info("Terminate snapshot connection completed successfully.",
                  resource=snapshot)
 
-    def remove_export(self, context, volume_id: ovo_fields.UUIDField) -> None:
+    def remove_export(self, context: context.RequestContext,
+                      volume_id: ovo_fields.UUIDField) -> None:
         """Removes an export for a volume."""
         volume_utils.require_driver_initialized(self.driver)
         volume_ref = self.db.volume_get(context, volume_id)
@@ -2256,7 +2276,9 @@ class VolumeManager(manager.CleanableManager,
                     LOG.error('Unable to terminate volume connection: '
                               '%(err)s.', {'err': err})
 
-    def _copy_volume_data(self, ctxt, src_vol, dest_vol, remote=None) -> None:
+    def _copy_volume_data(self, ctxt: context.RequestContext,
+                          src_vol: objects.Volume, dest_vol: objects.Volume,
+                          remote: Optional[str] = None) -> None:
         """Copy data from src_vol to dest_vol."""
 
         LOG.debug('_copy_volume_data %(src)s -> %(dest)s.',
@@ -2613,7 +2635,7 @@ class VolumeManager(manager.CleanableManager,
                  resource=volume)
         return volume.id
 
-    def _can_use_driver_migration(self, diff):
+    def _can_use_driver_migration(self, diff: Optional[dict]) -> bool:
         """Return when we can use driver assisted migration on a retype."""
         # We can if there's no retype or there are no difference in the types
         if not diff:
@@ -2745,7 +2767,7 @@ class VolumeManager(manager.CleanableManager,
         @timeutils.time_it(
             LOG, log_level=logging.WARN, message=slowmsg,
             min_duration=CONF.backend_stats_polling_interval / 2)
-        def get_stats():
+        def get_stats() -> dict:
             return self.driver.get_volume_stats(refresh=True)
 
         volume_stats = get_stats()
@@ -2822,7 +2844,7 @@ class VolumeManager(manager.CleanableManager,
             # queue it to be sent to the Schedulers.
             self.update_service_capabilities(volume_stats)
 
-    def _append_volume_stats(self, vol_stats) -> None:
+    def _append_volume_stats(self, vol_stats: dict) -> None:
         pools = vol_stats.get('pools', None)
         if pools:
             if isinstance(pools, list):
@@ -3028,10 +3050,10 @@ class VolumeManager(manager.CleanableManager,
         LOG.info("Extend volume completed successfully.",
                  resource=volume)
 
-    def _is_our_backend(self, host: str, cluster_name: str):
+    def _is_our_backend(self, host: str, cluster_name: str) -> bool:
         return ((not cluster_name and
                  volume_utils.hosts_are_equivalent(self.driver.host, host)) or
-                (cluster_name and
+                (bool(cluster_name) and
                  volume_utils.hosts_are_equivalent(self.driver.cluster_name,
                                                    cluster_name)))
 
@@ -3622,7 +3644,7 @@ class VolumeManager(manager.CleanableManager,
 
         return model_update, volumes_model_update
 
-    def _sort_snapshots(self, volumes, snapshots) -> list:
+    def _sort_snapshots(self, volumes: list, snapshots: list) -> list:
         # Sort source snapshots so that they are in the same order as their
         # corresponding target volumes. Each source snapshot in the snapshots
         # list should have a corresponding target volume in the volumes list.
@@ -5368,7 +5390,9 @@ class VolumeManager(manager.CleanableManager,
 
         return {'replication_targets': replication_targets}
 
-    def _refresh_volume_glance_meta(self, context, volume, image_meta):
+    def _refresh_volume_glance_meta(self, context: context.RequestContext,
+                                    volume: objects.Volume,
+                                    image_meta: dict) -> None:
         volume_utils.enable_bootable_flag(volume)
         volume_meta = volume_utils.get_volume_image_metadata(
             image_meta['id'], image_meta)
@@ -5380,7 +5404,9 @@ class VolumeManager(manager.CleanableManager,
         self.db.volume_glance_metadata_bulk_create(context, volume.id,
                                                    volume_meta)
 
-    def reimage(self, context, volume, image_meta, image_snap=None):
+    def reimage(self, context: context.RequestContext,
+                volume: objects.Volume, image_meta: dict,
+                image_snap: Optional[objects.Snapshot] = None) -> None:
         """Reimage a volume with specific image."""
         image_id = None
         try:
