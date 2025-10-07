@@ -23,7 +23,29 @@ import shlex
 import sys
 import threading
 
-using_threading = True
+from oslo_config import cfg
+
+volume_threading_opt = cfg.BoolOpt('volume_threading_enabled',
+                                   default=True,
+                                   help='Enable threading (instead of eventlet)')
+
+def is_threading_enabled() -> bool:
+    # This reads cinder CONF just to determine if threading is enabled,
+    # then resets the CONF system for regular startup later.
+    # This is so we can determine early enough whether or not to
+    # enable eventlet monkey patching.
+
+    CONF = cfg.CONF
+    CONF.register_opt(volume_threading_opt)
+
+    CONF(sys.argv[1:], project='cinder', version=None)
+    threading_enabled = CONF.volume_threading_enabled
+
+    CONF.reset()
+
+    return threading_enabled
+
+using_threading = is_threading_enabled()
 
 if not using_threading:
     import eventlet
@@ -47,7 +69,6 @@ if not using_threading:
 
 import typing
 
-from oslo_config import cfg
 from oslo_log import log as logging
 from oslo_privsep import priv_context
 from oslo_reports import guru_meditation_report as gmr
@@ -100,6 +121,7 @@ cluster_opt = cfg.StrOpt('cluster',
                               'configurations to work in HA Active-Active '
                               'mode.')
 CONF.register_opt(cluster_opt)
+
 
 LOG = None
 
@@ -198,6 +220,9 @@ def setup_eventlet():
         utils.monkey_patch()
 
 
+# TODO: maybe do two conf file reads?  one early to just determine eventlet/threading, then the normal one?
+
+
 def main() -> None:
     objects.register_all()
     gmr_opts.set_defaults(CONF)
@@ -211,6 +236,9 @@ def main() -> None:
     os_brick.setup(CONF)
     global LOG
     LOG = logging.getLogger(__name__)
+
+    if using_threading:
+        LOG.debug('threading backend initialized')
 
     if not CONF.enabled_backends:
         LOG.error('Configuration for cinder-volume does not specify '
