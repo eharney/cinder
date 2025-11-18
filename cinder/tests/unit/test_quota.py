@@ -1849,6 +1849,39 @@ class QuotaReserveSqlAlchemyTestCase(test.TestCase):
                                        project_id='test_project',
                                        delta=-2 * 1024), ])
 
+    def test_quota_reserve_overflow(self):
+        # Test that quota reservation detects integer overflow
+        # Maximum value for a 32-bit signed integer
+        max_int = 2147483647
+
+        # Set usage close to max int to trigger overflow
+        self.init_usage('test_project', 'gigabytes', max_int - 100, 0)
+        ctxt = context.RequestContext('admin', 'test_project', is_admin=True)
+        quotas = dict(gigabytes=-1)  # Unlimited quota
+        # Delta that would cause overflow: max_int - 100 + 200 > max_int
+        deltas = dict(gigabytes=200)
+
+        self.assertRaises(exception.QuotaUsageOverflow,
+                          sqa_api.quota_reserve,
+                          ctxt, self.resources, quotas,
+                          deltas, self.expire, 0, 0)
+
+    def test_quota_reserve_overflow_with_reserved(self):
+        # Test overflow detection when reserved value would overflow
+        max_int = 2147483647
+
+        # Set reserved close to max int to trigger overflow
+        self.init_usage('test_project', 'gigabytes', 1000, max_int - 100)
+        ctxt = context.RequestContext('admin', 'test_project', is_admin=True)
+        quotas = dict(gigabytes=-1)  # Unlimited quota
+        # Delta that would cause reserved to overflow
+        deltas = dict(gigabytes=200)
+
+        self.assertRaises(exception.QuotaUsageOverflow,
+                          sqa_api.quota_reserve,
+                          ctxt, self.resources, quotas,
+                          deltas, self.expire, 0, 0)
+
 
 @ddt.ddt
 class QuotaVolumeTypeReservationTestCase(test.TestCase):

@@ -96,6 +96,8 @@ def dispose_engine():
 
 
 _DEFAULT_QUOTA_NAME = 'default'
+# Maximum value for a 32-bit signed integer (used for quota usage tracking)
+_MAX_INT = 2147483647
 
 
 def get_backend():
@@ -1706,6 +1708,30 @@ def quota_reserve(
     ]
 
     # TODO(mc_nair): Should ignore/zero alloc if using non-nested driver
+
+    # Check for quota usage overflow
+    # The quota_usages table uses INTEGER columns which can overflow
+    # if values exceed the max integer value (2^31 - 1)
+    overflows = []
+    for r, delta in deltas.items():
+        # Check if total (in_use + reserved + delta) would overflow
+        if delta > 0:
+            total = usages[r].total
+            if total > _MAX_INT - delta:
+                overflows.append(r)
+            # Also check if reserved alone would overflow
+            elif usages[r].reserved > _MAX_INT - delta:
+                overflows.append(r)
+
+    if overflows:
+        usages_dict = {
+            k: dict(in_use=v.in_use, reserved=v.reserved)
+            for k, v in usages.items()
+        }
+        raise exception.QuotaUsageOverflow(
+            overs=sorted(overflows), quotas=quotas, usages=usages_dict,
+            max_int=_MAX_INT
+        )
 
     # Now, let's check the quotas
     # NOTE(Vek): We're only concerned about positive increments.
