@@ -42,6 +42,7 @@ import typing
 from typing import Any, Optional, Union
 
 from castellan import key_manager
+import futurist
 from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
@@ -194,6 +195,24 @@ MAPPING = {
 }
 
 
+class SizedThreadPoolManager(manager.SchedulerDependentManager):
+    def __init__(self, *args, **kwargs):
+        self._tp: Optional[futurist.GreenPoolExecutor |
+                           futurist.ThreadPoolExecutor] = None
+
+        super(SizedThreadPoolManager, self).__init__(*args, **kwargs)
+
+    def _init_pool(self, max_workers):
+        if self.eventlet_enabled:
+            self._tp = futurist.GreenPoolExecutor(max_workers)
+        else:
+            self._tp = futurist.ThreadPoolExecutor(max_workers)
+
+    def _add_to_threadpool(self, func, *args, **kwargs) -> None:
+        assert self._tp is not None
+        self._tp.submit(func, *args, **kwargs)
+
+
 def clean_volume_locks(func):
     @functools.wraps(func)
     def wrapper(self, context, volume, *args, **kwargs):
@@ -228,7 +247,7 @@ def clean_snapshot_locks(func):
 
 
 class VolumeManager(manager.CleanableManager,
-                    manager.SchedulerDependentManager):
+                    SizedThreadPoolManager):
     """Manages attachable block storage devices."""
 
     RPC_API_VERSION = volume_rpcapi.VolumeAPI.RPC_API_VERSION
@@ -266,7 +285,7 @@ class VolumeManager(manager.CleanableManager,
         service_name = service_name or 'backend_defaults'
         self.configuration = config.Configuration(volume_backend_opts,
                                                   config_group=service_name)
-        self._set_tpool_size(
+        self._init_pool(
             self.configuration.backend_native_threads_pool_size)
         self.stats: dict = {}
         self.service_uuid = None
